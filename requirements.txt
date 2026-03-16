@@ -1,4 +1,5 @@
 fdb
 requests
 pyyaml
+pyinstaller
 
