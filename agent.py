@@ -99,9 +99,25 @@ class ExtractorAgent:
 
         ttk.Button(btn_frame, text="Сохранить настройки", command=self.save_settings).pack(side="right", padx=5)
 
+        # Log Area
+        log_frame = ttk.LabelFrame(self.root, text="Логи работы")
+        log_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        from tkinter import scrolledtext
+        self.log_area = scrolledtext.ScrolledText(log_frame, state='disabled', height=10, font=("Consolas", 8))
+        self.log_area.pack(fill="both", expand=True, padx=5, pady=5)
+
         # Status Bar
         self.status_var = tk.StringVar(value="Статус: Остановлено")
         ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w").pack(fill="x", side="bottom")
+
+    def log(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.log_area.config(state='normal')
+        self.log_area.insert(tk.END, f"[{timestamp}] {message}\n")
+        self.log_area.see(tk.END)
+        self.log_area.config(state='disabled')
+        print(f"[{timestamp}] {message}")
 
     def browse_db(self):
         filename = filedialog.askopenfilename(filetypes=[("Firebird DB", "*.GDB;*.FDB")])
@@ -151,15 +167,14 @@ class ExtractorAgent:
                 messagebox.showwarning("Внимание", "Заполните настройки перед запуском")
                 return
             
-            self.running = True
-            self.start_btn.config(text="ОСТАНОВИТЬ СИНХРОНИЗАЦИЮ")
-            self.status_var.set("Статус: Работает")
+            self.log("Синхронизация запущена")
             self.sync_thread = threading.Thread(target=self.sync_loop, daemon=True)
             self.sync_thread.start()
         else:
             self.running = False
             self.start_btn.config(text="ЗАПУСТИТЬ СИНХРОНИЗАЦИЮ")
             self.status_var.set("Статус: Остановлено")
+            self.log("Синхронизация остановлена")
 
     def sync_loop(self):
         while self.running:
@@ -184,27 +199,39 @@ class ExtractorAgent:
         cur = conn.cursor()
         
         sync_data = []
+        if not self.config['sync']['tables']:
+            self.log("Внимание: Не выбраны таблицы для синхронизации!")
+            conn.close()
+            return
+
         for table in self.config['sync']['tables']:
             last_id = self.state.get(table, 0)
             
-            # This is a generic query. It assumes tables have an incremental ID or similar.
-            # In a real Firebird DB, we might need to be more specific.
-            # For this MVP, we try to use RDB$DB_KEY or ID if exists.
+            # Detect primary ID column
+            cur.execute(f"SELECT * FROM {table} WHERE 1=0")
+            columns = [column[0].upper() for column in cur.description]
+            id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID']), None)
+            
             try:
-                cur.execute(f"SELECT FIRST 100 * FROM {table} WHERE ID > {last_id} ORDER BY ID ASC")
-            except:
-                # Fallback if no ID column
-                cur.execute(f"SELECT FIRST 100 * FROM {table}")
-            
-            columns = [column[0] for column in cur.description]
-            rows = [dict(zip(columns, row)) for row in cur.fetchall()]
-            
-            if rows:
+                if id_col:
+                    cur.execute(f"SELECT FIRST 100 * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
+                else:
+                    cur.execute(f"SELECT FIRST 100 * FROM {table}")
+                
+                raw_rows = cur.fetchall()
+                if not raw_rows:
+                    continue
+                
+                rows = [dict(zip(columns, row)) for row in raw_rows]
                 sync_data.append({'table': table, 'records': rows})
-                # Update last_id to the max ID in this batch
-                if 'ID' in columns:
-                    new_last_id = max(r['ID'] for r in rows)
+                
+                if id_col and rows:
+                    new_last_id = max(r[id_col] for r in rows)
                     self.state[table] = new_last_id
+                
+                self.log(f"Таблица {table}: Найдено {len(rows)} новых записей")
+            except Exception as e:
+                self.log(f"Ошибка при чтении {table}: {e}")
         
         conn.close()
         
@@ -229,10 +256,15 @@ class ExtractorAgent:
             resp = requests.get(url, headers=headers, timeout=10)
             resp.raise_for_status()
             cmd = resp.json()
-            if cmd.get('command') == 'sync_period':
-                # Handle force sync for a period
+            command_text = cmd.get('command')
+            if command_text == 'full_sync':
+                self.log("Получена команда ПОЛНАЯ СИНХРОНИЗАЦИЯ. Сброс состояния...")
+                self.state = {}
+                self.save_state()
+            elif command_text == 'restart':
+                self.log("Получена команда RESTART. Пожалуйста, перезапустите приложение вручную.")
+            elif command_text == 'sync_period':
                 print(f"Received force sync command for {cmd.get('params')}")
-                # Implementation of full sync would go here
         except Exception as e:
             pass
 
