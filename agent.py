@@ -94,9 +94,9 @@ class ExtractorAgent:
         query_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         sql_text = """SELECT 
-    u.UCHET_ID as ID, COALESCE(t.FN_TABLE, 'НЕТ СТОЛА') as TABLE_NUM,
+    u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM,
     u.FD_START as START_TIME, u.FD_END as END_TIME,
-    u.FN_TIME as DURATION_MINS, COALESCE(c.FC_NAME, 'УДАЛЁН') as CLIENT_NAME,
+    u.FN_TIME as DURATION_MINS, c.FC_NAME as CLIENT_NAME,
     u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED
 FROM TUCHET u
 LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
