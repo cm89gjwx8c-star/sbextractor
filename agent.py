@@ -8,12 +8,15 @@ import requests
 import time
 import threading
 from datetime import datetime
+import sys
+from PIL import Image, ImageDraw
+import pystray
 
 CONFIG_FILE = 'config.yaml'
 STATE_FILE = 'state.json'
 
 class ExtractorAgent:
-    def __init__(self):
+    def __init__(self, autostart=False):
         self.config = self.load_config()
         self.state = self.load_state()
         self.running = False
@@ -21,7 +24,17 @@ class ExtractorAgent:
         self.root.title("Fortuna Dashboard - Firebird Extractor")
         self.root.geometry("500x600")
         
+        self.tray_icon = None
         self.setup_ui()
+        self.setup_tray()
+        
+        # Override close button to minimize to tray
+        self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
+        
+        if autostart:
+            self.log("Автозапуск: Запуск синхронизации в фоновом режиме")
+            self.root.withdraw() # Start hidden
+            self.toggle_sync()
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -46,6 +59,41 @@ class ExtractorAgent:
     def save_state(self):
         with open(STATE_FILE, 'w') as f:
             json.dump(self.state, f)
+
+    def setup_tray(self):
+        # Create a simple icon image
+        width = 64
+        height = 64
+        color1 = "blue"
+        color2 = "white"
+        image = Image.new('RGB', (width, height), color1)
+        dc = ImageDraw.Draw(image)
+        dc.rectangle([width // 4, height // 4, width * 3 // 4, height * 3 // 4], fill=color2)
+        
+        menu = pystray.Menu(
+            pystray.MenuItem('Показать', self.show_window),
+            pystray.MenuItem('Выход', self.quit_app)
+        )
+        self.tray_icon = pystray.Icon("extractor_agent", image, "Firebird Extractor", menu)
+        
+        # Run tray icon in a separate thread
+        thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+        thread.start()
+
+    def hide_window(self):
+        self.root.withdraw()
+
+    def show_window(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def quit_app(self):
+        self.running = False
+        if self.tray_icon:
+            self.tray_icon.stop()
+        self.root.quit()
+        sys.exit(0)
 
     def setup_ui(self):
         # Database Settings
@@ -96,7 +144,8 @@ class ExtractorAgent:
         sql_text = """SELECT 
     u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM,
     u.FD_START as START_TIME, u.FD_END as END_TIME,
-    u.FN_TIME as DURATION_MINS, c.FC_NAME as CLIENT_NAME,
+    u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT,
+    c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE,
     u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED
 FROM TUCHET u
 LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
@@ -141,10 +190,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         if filename:
             self.db_path_var.set(filename)
 
-    def fetch_tables(self):
-        # Deprecated: Selection removed from UI
-        pass
-
     def save_settings(self):
         self.config['db']['path'] = self.db_path_var.get()
         self.config['db']['user'] = self.db_user_var.get()
@@ -157,9 +202,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             self.config['sync']['batch_size'] = int(self.sync_batch_var.get())
         except ValueError:
             self.log("Ошибка: интервал и размер пакета должны быть числами")
-
-        # Selected tables are now handled implicitly by the code logic
-        # self.config['sync']['tables'] = ...
         
         self.save_config()
 
@@ -322,7 +364,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
             batch_size = self.config['sync'].get('batch_size', 1000)
             for table in tables:
-                count_in_table = 0
                 while True:
                     last_id = self.state.get(table, 0)
                     if last_id == 'COMPLETED':
@@ -338,7 +379,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         if id_col:
                             cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
                         else:
-                            self.log(f"Таблица {table}: Колонка ID не найдена, выполняю разовую выгрузку")
                             cur.execute(f"SELECT * FROM {table}")
                         
                         raw_rows = cur.fetchall()
@@ -350,19 +390,13 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         sync_data.append({'table': table, 'records': rows})
                         
                         if id_col:
-                            new_last_id = max(r[id_col] for r in rows)
-                            self.state[table] = new_last_id
+                            self.state[table] = max(r[id_col] for r in rows)
                         else:
                             self.state[table] = 'COMPLETED'
-                            count_in_table += len(rows)
                             break
                         
-                        count_in_table += len(rows)
                         if len(raw_rows) < batch_size:
                             break
-                        if count_in_table >= (batch_size * 5):
-                            break
-                            
                     except Exception as e:
                         self.log(f"Ошибка при чтении {table}: {e}")
                         break
@@ -391,7 +425,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             json_payload = json.dumps({'data': data}, default=json_serial)
             resp = requests.post(url, data=json_payload, headers={**headers, 'Content-Type': 'application/json'}, timeout=30)
             resp.raise_for_status()
-            self.log(f"Выгрузка успешна: {len(data)} объектов")
+            self.log(f"Выгрузка успешна: {len(data)} таблиц")
         except Exception as e:
             self.log(f"Ошибка выгрузки на Railway: {e}")
 
@@ -418,5 +452,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             pass
 
 if __name__ == "__main__":
-    app = ExtractorAgent()
+    autostart = "--autostart" in sys.argv
+    app = ExtractorAgent(autostart=autostart)
     app.root.mainloop()
