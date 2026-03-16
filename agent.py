@@ -179,10 +179,128 @@ class ExtractorAgent:
             self.status_var.set("Статус: Остановлено")
             self.log("Синхронизация остановлена")
 
+    def get_table_category(self, table_num):
+        try:
+            num = int(table_num)
+            if 1 <= num <= 9: return 'Русский'
+            if 10 <= num <= 12: return 'Пул'
+            if num in [13, 14]: return 'Теннис'
+            if num == 16: return 'ВИП'
+        except:
+            pass
+        return 'Неизвестно'
+
+    def sync_billing(self):
+        try:
+            conn = fdb.connect(
+                dsn=self.config['db']['path'],
+                user=self.config['db']['user'],
+                password=self.config['db']['password'],
+                charset='UTF8'
+            )
+            cur = conn.cursor()
+            
+            last_id = self.state.get('JOINED_BILLING', 0)
+            
+            query = """
+                SELECT 
+                    u.UCHET_ID as ID,
+                    t.FN_TABLE as TABLE_NUM,
+                    u.FD_START as START_TIME,
+                    u.FD_END as END_TIME,
+                    u.FN_TIME as DURATION_MINS,
+                    u.FN_RULE as DISCOUNT_PERCENT,
+                    c.FC_NAME as CLIENT_NAME,
+                    u.FN_SUMMA1 as SUM_BASE,
+                    u.FN_SUMMA as SUM_WITH_DISCOUNT,
+                    u.FN_TAR as TARIFF_APPLIED
+                FROM TUCHET u
+                LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
+                LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID
+                WHERE u.UCHET_ID > ?
+                ORDER BY u.UCHET_ID ASC
+                ROWS 1 TO 100
+            """
+            
+            cur.execute(query, (last_id,))
+            columns = [column[0].upper() for column in cur.description]
+            raw_rows = cur.fetchall()
+            
+            if not raw_rows:
+                conn.close()
+                return
+
+            processed_records = []
+            ru_months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+            
+            for row in raw_rows:
+                r = dict(zip(columns, row))
+                
+                # Basic Mapping
+                id_val = r['ID']
+                start_time = r['START_TIME']
+                end_time = r['END_TIME']
+                sum_base = float(r['SUM_BASE'] or 0)
+                sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
+                
+                # Calculations
+                dt_start = start_time # fdb usually returns datetime objects
+                if isinstance(dt_start, str):
+                    dt_start = datetime.fromisoformat(dt_start.replace('Z', ''))
+
+                month = f"{ru_months[dt_start.month-1]} {dt_start.year}"
+                
+                # ISO Week
+                week_num = f"Неделя {dt_start.isocalendar()[1]} ({dt_start.year})"
+                day_of_week = dt_start.strftime('%a').upper()
+                date_formatted = dt_start.strftime('%Y-%m-%d')
+                start_hour = dt_start.hour
+                discount_lost = round(sum_base - sum_with_discount, 2)
+                
+                table_num = r['TABLE_NUM']
+                table_category = self.get_table_category(table_num)
+
+                processed_records.append({
+                    'id': id_val,
+                    'tableId': str(table_num),
+                    'tableCategory': table_category,
+                    'startTime': start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time),
+                    'endTime': end_time.isoformat() if end_time and hasattr(end_time, 'isoformat') else str(end_time),
+                    'month': month,
+                    'weekNum': week_num,
+                    'dayOfWeek': day_of_week,
+                    'dateFormatted': date_formatted,
+                    'startHour': start_hour,
+                    'durationMins': int(r['DURATION_MINS'] or 0),
+                    'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
+                    'client': r['CLIENT_NAME'] or 'Гость без карты',
+                    'sumWithDiscount': sum_with_discount,
+                    'sumBase': sum_base,
+                    'discountLost': discount_lost,
+                    'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
+                    'is_processed': True # Flag for server
+                })
+                
+                last_id = max(last_id, id_val)
+
+            self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_records}])
+            self.state['JOINED_BILLING'] = last_id
+            self.save_state()
+            self.log(f"Синхронизировано {len(processed_records)} записей биллинга (Joined)")
+            
+            conn.close()
+        except Exception as e:
+            self.log(f"Ошибка синхронизации биллинга: {e}")
+
     def sync_loop(self):
         while self.running:
             try:
+                # 1. Perform refined billing sync (Joined)
+                self.sync_billing()
+                
+                # 2. Perform generic sync for other tables if any
                 self.perform_sync()
+                
                 self.check_commands()
                 self.send_heartbeat()
             except Exception as e:
