@@ -77,18 +77,23 @@ class ExtractorAgent:
         self.rw_token_var = tk.StringVar(value=self.config['railway']['token'])
         ttk.Entry(rw_frame, textvariable=self.rw_token_var, width=50).grid(row=1, column=1, padx=5, pady=2)
 
-        # Tables Selection
-        table_frame = ttk.LabelFrame(self.root, text="Выбор таблиц для синхронизации")
-        table_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        # SQL Query Display (Read-only)
+        query_frame = ttk.LabelFrame(self.root, text="Текущий SQL запрос (Биллинг)")
+        query_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.table_listbox = tk.Listbox(table_frame, selectmode="multiple")
-        self.table_listbox.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        sql_text = """SELECT 
+    u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM,
+    u.FD_START as START_TIME, u.FD_END as END_TIME,
+    u.FN_TIME as DURATION_MINS, c.FC_NAME as CLIENT_NAME,
+    u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED
+FROM TUCHET u
+LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
+LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         
-        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.table_listbox.yview)
-        scrollbar.pack(side="right", fill="y")
-        self.table_listbox.config(yscrollcommand=scrollbar.set)
-
-        ttk.Button(self.root, text="Загрузить список таблиц из БД", command=self.fetch_tables).pack(pady=5)
+        self.query_area = tk.Text(query_frame, height=8, font=("Consolas", 8), bg="#f0f0f0")
+        self.query_area.insert(tk.END, sql_text)
+        self.query_area.config(state='disabled')
+        self.query_area.pack(fill="both", expand=True, padx=5, pady=5)
 
         # Control Buttons
         btn_frame = ttk.Frame(self.root)
@@ -125,27 +130,8 @@ class ExtractorAgent:
             self.db_path_var.set(filename)
 
     def fetch_tables(self):
-        try:
-            conn = fdb.connect(
-                dsn=self.db_path_var.get(),
-                user=self.db_user_var.get(),
-                password=self.db_pass_var.get(),
-                charset='UTF8'
-            )
-            cur = conn.cursor()
-            cur.execute("SELECT rdb$relation_name FROM rdb$relations WHERE rdb$view_blr IS NULL AND (rdb$system_flag IS NULL OR rdb$system_flag = 0)")
-            tables = [r[0].strip() for r in cur.fetchall()]
-            conn.close()
-
-            self.table_listbox.delete(0, tk.END)
-            for t in tables:
-                self.table_listbox.insert(tk.END, t)
-                if t in self.config['sync']['tables']:
-                    self.table_listbox.selection_set(tk.END)
-            
-            messagebox.showinfo("Успех", f"Загружено {len(tables)} таблиц")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось подключиться к БД: {e}")
+        # Deprecated: Selection removed from UI
+        pass
 
     def save_settings(self):
         self.config['db']['path'] = self.db_path_var.get()
@@ -154,8 +140,8 @@ class ExtractorAgent:
         self.config['railway']['url'] = self.rw_url_var.get()
         self.config['railway']['token'] = self.rw_token_var.get()
         
-        selected_indices = self.table_listbox.curselection()
-        self.config['sync']['tables'] = [self.table_listbox.get(i) for i in selected_indices]
+        # Selected tables are now handled implicitly by the code logic
+        # self.config['sync']['tables'] = ...
         
         self.save_config()
         messagebox.showinfo("Готово", "Настройки сохранены")
