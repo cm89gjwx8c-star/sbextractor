@@ -246,18 +246,19 @@ class ExtractorAgent:
         url = f"{self.config['railway']['url'].rstrip('/')}/api/extractor/sync"
         headers = {'x-extractor-token': self.config['railway']['token']}
         
-        # Custom JSON serializer to handle Decimal and other types
-        def decimal_default(obj):
-            if isinstance(obj, (datetime,)):
-                return obj.isoformat()
+        # Custom JSON serializer to handle Decimal, Date, Time and other types
+        def json_serial(obj):
+            from datetime import datetime, date, time
             from decimal import Decimal
+            if isinstance(obj, (datetime, date, time)):
+                return obj.isoformat()
             if isinstance(obj, Decimal):
                 return float(obj)
             raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
         try:
             # We use json.dumps manually to apply the default serializer
-            json_payload = json.dumps({'data': data}, default=decimal_default)
+            json_payload = json.dumps({'data': data}, default=json_serial)
             resp = requests.post(url, data=json_payload, headers={**headers, 'Content-Type': 'application/json'}, timeout=30)
             resp.raise_for_status()
             self.log(f"Выгрузка успешна: {len(data)} таблиц")
