@@ -94,10 +94,10 @@ class ExtractorAgent:
         query_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         sql_text = """SELECT 
-    u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM,
-    u.FD_START as START_TIME, u.FD_END as END_TIME,
-    u.FN_TIME as DURATION_MINS, c.FC_NAME as CLIENT_NAME,
-    u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED
+    u.UCHET_ID as ID, t.FN_TABLE as T_NUM,
+    u.FD_START as T_START, u.FD_END as T_END,
+    u.FN_TIME as T_MINS, c.FC_NAME as C_NAME,
+    u.FN_SUMMA as S_DISC, u.FN_TAR as S_TAR
 FROM TUCHET u
 LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
 LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
@@ -201,6 +201,15 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             )
             cur = conn.cursor()
             
+            # Diagnostic: catch column issues and log them for troubleshooting
+            try:
+                for t_name in ['TUCHET', 'TCLIENT', 'TTABLE']:
+                    cur.execute(f"SELECT FIRST 1 * FROM {t_name}")
+                    field_names = [col[0].upper() for col in cur.description]
+                    self.log(f"Колонки {t_name}: {', '.join(field_names[:10])}...")
+            except Exception as d_e:
+                self.log(f"Диагностика колонок не удалась: {d_e}")
+            
             total_processed = 0
             batch_size = self.config['sync'].get('batch_size', 1000)
             
@@ -214,9 +223,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         u.FD_START as START_TIME,
                         u.FD_END as END_TIME,
                         u.FN_TIME as DURATION_MINS,
-                        u.FN_RULE as DISCOUNT_PERCENT,
                         c.FC_NAME as CLIENT_NAME,
-                        u.FN_SUMMA1 as SUM_BASE,
                         u.FN_SUMMA as SUM_WITH_DISCOUNT,
                         u.FN_TAR as TARIFF_APPLIED
                     FROM TUCHET u
@@ -276,13 +283,13 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         'dayOfWeek': day_of_week,
                         'dateFormatted': date_formatted,
                         'startHour': start_hour,
-                        'durationMins': int(r['DURATION_MINS'] or 0),
-                        'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
+                        'durationMins': int(r.get('DURATION_MINS') or 0),
+                        'discountPercent': 0.0, # Removed as it often fails on older DBs
                         'client': client_name,
                         'sumWithDiscount': sum_with_discount,
-                        'sumBase': sum_base,
-                        'discountLost': discount_lost,
-                        'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
+                        'sumBase': sum_with_discount, # Fallback to total sum
+                        'discountLost': 0.0,
+                        'tariffApplied': float(r.get('TARIFF_APPLIED') or 0),
                         'is_processed': True
                     })
                     
