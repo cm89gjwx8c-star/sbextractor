@@ -212,20 +212,31 @@ class ExtractorAgent:
             # Fetch in batches of 1000 to catch up faster
             while True:
                 last_id = self.state.get(table, 0)
-                
+                # For tables without ID, we use a special state flag 'COMPLETED'
+                if last_id == 'COMPLETED':
+                    break
+
                 # Detect primary ID column
                 cur.execute(f"SELECT * FROM {table} WHERE 1=0")
                 columns = [column[0].upper() for column in cur.description]
-                id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID']), None)
+                
+                # Extended ID detection to include common Firebird/Application patterns
+                id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID']), None)
                 
                 try:
                     if id_col:
                         cur.execute(f"SELECT FIRST 1000 * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
                     else:
-                        cur.execute(f"SELECT FIRST 1000 * FROM {table}")
+                        # If no ID column is found, we can only safely do a one-time full sync
+                        # to avoid continuous duplication in every cycle.
+                        self.log(f"Таблица {table}: Колонка ID не найдена, выполняю полную выгрузку")
+                        cur.execute(f"SELECT * FROM {table}")
                     
                     raw_rows = cur.fetchall()
                     if not raw_rows:
+                        # If no ID, but we found nothing this time, it might already be done
+                        if not id_col:
+                            self.state[table] = 'COMPLETED'
                         break
                     
                     rows = [dict(zip(columns, row)) for row in raw_rows]
@@ -234,16 +245,18 @@ class ExtractorAgent:
                     if id_col and rows:
                         new_last_id = max(r[id_col] for r in rows)
                         self.state[table] = new_last_id
+                    else:
+                        # Full sync done for table without ID
+                        self.state[table] = 'COMPLETED'
+                        count_in_table += len(rows)
+                        break
                     
                     count_in_table += len(rows)
-                    
-                    # If we got less than 1000, we've caught up for this table
                     if len(rows) < 1000:
                         break
                     
-                    # To avoid massive memory usage or timeout, we limit to 5000 per full sync cycle per table
                     if count_in_table >= 5000:
-                        self.log(f"Таблица {table}: Промежуточный лимит 5000 достигнут, продолжим в следующем цикле")
+                        self.log(f"Таблица {table}: Промежуточный лимит 5000 достигнут")
                         break
                         
                 except Exception as e:
