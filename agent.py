@@ -209,100 +209,78 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             while True:
                 last_id = self.state.get('JOINED_BILLING', 0)
                 
-                query = f"""
-                    SELECT 
-                        u.UCHET_ID as ID,
-                        t.FN_TABLE as TABLE_NUM,
-                        u.FD_START as START_TIME,
-                        u.FD_END as END_TIME,
-                        u.FN_TIME as DURATION_MINS,
-                        u.FN_RULE as DISCOUNT_PERCENT,
-                        c.FC_NAME as CLIENT_NAME,
-                        u.FN_SUMMA1 as SUM_BASE,
-                        u.FN_SUMMA as SUM_WITH_DISCOUNT,
-                        u.FN_TAR as TARIFF_APPLIED
-                    FROM TUCHET u
-                    LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
-                    LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID
-                    WHERE u.UCHET_ID > ?
-                    ORDER BY u.UCHET_ID ASC
-                    ROWS 1 TO {batch_size}
-                """
-            
-            cur.execute(query, (last_id,))
-            columns = [column[0].upper() for column in cur.description]
-            raw_rows = cur.fetchall()
-            
-            if not raw_rows:
-                conn.close()
-                return
+                query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID > ? ORDER BY u.UCHET_ID ASC ROWS 1 TO {batch_size}"
+                
+                cur.execute(query, (last_id,))
+                columns = [column[0].upper() for column in cur.description]
+                raw_rows = cur.fetchall()
+                
+                if not raw_rows:
+                    break
 
-            processed_records = []
-            ru_months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-            
-            for row in raw_rows:
-                r = dict(zip(columns, row))
+                processed_records = []
+                ru_months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
                 
-                # Basic Mapping
-                id_val = r['ID']
-                start_time = r['START_TIME']
-                end_time = r['END_TIME']
-                sum_base = float(r['SUM_BASE'] or 0)
-                sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
-                
-                # Calculations
-                dt_start = start_time # fdb usually returns datetime objects
-                if isinstance(dt_start, str):
-                    dt_start = datetime.fromisoformat(dt_start.replace('Z', ''))
+                for row in raw_rows:
+                    r = dict(zip(columns, row))
+                    
+                    id_val = r['ID']
+                    start_time = r['START_TIME']
+                    end_time = r['END_TIME']
+                    sum_base = float(r['SUM_BASE'] or 0)
+                    sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
+                    
+                    dt_start = start_time
+                    if isinstance(dt_start, str):
+                        try:
+                            dt_start = datetime.fromisoformat(dt_start.replace('Z', ''))
+                        except:
+                            dt_start = datetime.now()
 
-                month = f"{ru_months[dt_start.month-1]} {dt_start.year}"
-                
-                # ISO Week
-                week_num = f"Неделя {dt_start.isocalendar()[1]} ({dt_start.year})"
-                day_of_week = dt_start.strftime('%a').upper()
-                date_formatted = dt_start.strftime('%Y-%m-%d')
-                start_hour = dt_start.hour
-                discount_lost = round(sum_base - sum_with_discount, 2)
-                
-                table_num = r['TABLE_NUM']
-                table_category = self.get_table_category(table_num)
+                    month = f"{ru_months[dt_start.month-1]} {dt_start.year}"
+                    week_num = f"Неделя {dt_start.isocalendar()[1]} ({dt_start.year})"
+                    day_of_week = dt_start.strftime('%a').upper()
+                    date_formatted = dt_start.strftime('%Y-%m-%d')
+                    start_hour = dt_start.hour
+                    discount_lost = round(sum_base - sum_with_discount, 2)
+                    
+                    table_num = r['TABLE_NUM']
+                    table_category = self.get_table_category(table_num)
 
-                processed_records.append({
-                    'id': id_val,
-                    'tableId': str(table_num),
-                    'tableCategory': table_category,
-                    'startTime': start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time),
-                    'endTime': end_time.isoformat() if end_time and hasattr(end_time, 'isoformat') else str(end_time),
-                    'month': month,
-                    'weekNum': week_num,
-                    'dayOfWeek': day_of_week,
-                    'dateFormatted': date_formatted,
-                    'startHour': start_hour,
-                    'durationMins': int(r['DURATION_MINS'] or 0),
-                    'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
-                    'client': r['CLIENT_NAME'] or 'Гость без карты',
-                    'sumWithDiscount': sum_with_discount,
-                    'sumBase': sum_base,
-                    'discountLost': discount_lost,
-                    'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
-                    'is_processed': True # Flag for server
-                })
-                
-                last_id = max(last_id, id_val)
+                    processed_records.append({
+                        'id': id_val,
+                        'tableId': str(table_num),
+                        'tableCategory': table_category,
+                        'startTime': start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time),
+                        'endTime': end_time.isoformat() if end_time and hasattr(end_time, 'isoformat') else str(end_time),
+                        'month': month,
+                        'weekNum': week_num,
+                        'dayOfWeek': day_of_week,
+                        'dateFormatted': date_formatted,
+                        'startHour': start_hour,
+                        'durationMins': int(r['DURATION_MINS'] or 0),
+                        'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
+                        'client': r['CLIENT_NAME'] or 'Гость без карты',
+                        'sumWithDiscount': sum_with_discount,
+                        'sumBase': sum_base,
+                        'discountLost': discount_lost,
+                        'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
+                        'is_processed': True
+                    })
+                    
+                    last_id = max(last_id, id_val)
 
-            self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_records}])
-            self.state['JOINED_BILLING'] = last_id
-            self.save_state()
-            total_processed += len(processed_records)
-            
-            # If we got less than batch_size, we caught up
-            if len(raw_rows) < batch_size:
-                break
-            
-            # Limit to avoid starvation of other sync processes
-            if total_processed >= (batch_size * 5):
-                self.log(f"Биллинг: Промежуточный лимит {batch_size * 5} достигнут")
-                break
+                self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_records}])
+                self.state['JOINED_BILLING'] = last_id
+                self.save_state()
+                total_processed += len(processed_records)
+                
+                if len(raw_rows) < batch_size:
+                    break
+                
+                if total_processed >= (batch_size * 5):
+                    self.log(f"Биллинг: Промежуточный лимит {batch_size * 5} достигнут")
+                    break
 
             if total_processed > 0:
                 self.log(f"Синхронизировано {total_processed} записей биллинга (Joined)")
@@ -314,116 +292,92 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
     def sync_loop(self):
         while self.running:
             try:
-                # 1. Perform refined billing sync (Joined)
                 self.sync_billing()
-                
-                # 2. Perform generic sync for other tables if any
                 self.perform_sync()
-                
                 self.check_commands()
                 self.send_heartbeat()
             except Exception as e:
                 self.log(f"Критическая ошибка цикла: {e}")
             
-            for _ in range(self.config['sync']['interval_seconds']):
+            interval = int(self.config['sync'].get('interval_seconds', 60))
+            for _ in range(interval):
                 if not self.running: break
                 time.sleep(1)
 
     def perform_sync(self):
-        conn = fdb.connect(
-            dsn=self.config['db']['path'],
-            user=self.config['db']['user'],
-            password=self.config['db']['password'],
-            charset='UTF8'
-        )
-        cur = conn.cursor()
-        
-        sync_data = []
-        if not self.config['sync']['tables']:
-            self.log("Внимание: Не выбраны таблицы для синхронизации!")
-            conn.close()
-            return
-
-        for table in self.config['sync']['tables']:
-            count_in_table = 0
-            # Fetch in batches to catch up faster
-            batch_size = self.config['sync'].get('batch_size', 1000)
-            while True:
-                last_id = self.state.get(table, 0)
-                # For tables without ID, we use a special state flag 'COMPLETED'
-                if last_id == 'COMPLETED':
-                    break
-
-                # Detect primary ID column
-                cur.execute(f"SELECT * FROM {table} WHERE 1=0")
-                columns = [column[0].upper() for column in cur.description]
-                
-                # Extended ID detection to include common Firebird/Application patterns
-                id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
-                
-                # If still None, look for any column starting with ID_ or ending with _ID
-                if not id_col:
-                    id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
-
-                # Fallback: if there is exactly one column that is integer type, it's likely the ID
-                # (We can't easily check type here without another query, but we can try common prefixes)
-                
-                try:
-                    if id_col:
-                        cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
-                    else:
-                        # If no ID column is found, we can only safely do a one-time full sync
-                        self.log(f"Таблица {table}: Колонка ID не определена. Доступные колонки: {', '.join(columns[:10])}...")
-                        self.log(f"Таблица {table}: Выполняю разовую выгрузку...")
-                        cur.execute(f"SELECT * FROM {table}")
-                    
-                    raw_rows = cur.fetchall()
-                    if not raw_rows:
-                        # If no ID, but we found nothing this time, it might already be done
-                        if not id_col:
-                            self.state[table] = 'COMPLETED'
-                        break
-                    
-                    rows = [dict(zip(columns, row)) for row in raw_rows]
-                    sync_data.append({'table': table, 'records': rows})
-                    
-                    if id_col and rows:
-                        new_last_id = max(r[id_col] for r in rows)
-                        self.state[table] = new_last_id
-                    else:
-                        # Full sync done for table without ID
-                        self.state[table] = 'COMPLETED'
-                        count_in_table += len(rows)
-                        break
-                    
-                    count_in_table += len(rows)
-                    if len(rows) < batch_size:
-                        break
-                    
-                    if count_in_table >= (batch_size * 5):
-                        self.log(f"Таблица {table}: Промежуточный лимит {batch_size * 5} достигнут")
-                        break
-                        
-                except Exception as e:
-                    self.log(f"Ошибка при чтении {table}: {e}")
-                    break
+        try:
+            conn = fdb.connect(
+                dsn=self.config['db']['path'],
+                user=self.config['db']['user'],
+                password=self.config['db']['password'],
+                charset='UTF8'
+            )
+            cur = conn.cursor()
             
-            if count_in_table > 0:
-                self.log(f"Таблица {table}: Всего обработано {count_in_table} записей")
-        
-        conn.close()
-        
-        if sync_data:
-            self.upload_to_railway(sync_data)
-        
-        # Always save state after loop, even if no data was synced, to persist COMPLETED flags
-        self.save_state()
+            sync_data = []
+            tables = self.config['sync'].get('tables', [])
+            if not tables:
+                conn.close()
+                return
+
+            batch_size = self.config['sync'].get('batch_size', 1000)
+            for table in tables:
+                count_in_table = 0
+                while True:
+                    last_id = self.state.get(table, 0)
+                    if last_id == 'COMPLETED':
+                        break
+
+                    cur.execute(f"SELECT * FROM {table} WHERE 1=0")
+                    columns = [column[0].upper() for column in cur.description]
+                    id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
+                    if not id_col:
+                        id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
+
+                    try:
+                        if id_col:
+                            cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
+                        else:
+                            self.log(f"Таблица {table}: Колонка ID не найдена, выполняю разовую выгрузку")
+                            cur.execute(f"SELECT * FROM {table}")
+                        
+                        raw_rows = cur.fetchall()
+                        if not raw_rows:
+                            if not id_col: self.state[table] = 'COMPLETED'
+                            break
+                        
+                        rows = [dict(zip(columns, row)) for row in raw_rows]
+                        sync_data.append({'table': table, 'records': rows})
+                        
+                        if id_col:
+                            new_last_id = max(r[id_col] for r in rows)
+                            self.state[table] = new_last_id
+                        else:
+                            self.state[table] = 'COMPLETED'
+                            count_in_table += len(rows)
+                            break
+                        
+                        count_in_table += len(rows)
+                        if len(raw_rows) < batch_size:
+                            break
+                        if count_in_table >= (batch_size * 5):
+                            break
+                            
+                    except Exception as e:
+                        self.log(f"Ошибка при чтении {table}: {e}")
+                        break
+            
+            conn.close()
+            if sync_data:
+                self.upload_to_railway(sync_data)
+            self.save_state()
+        except Exception as e:
+            self.log(f"Ошибка синхронизации таблиц: {e}")
 
     def upload_to_railway(self, data):
         url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/sync"
         headers = {'x-extractor-token': self.config['railway']['token'].strip()}
         
-        # Custom JSON serializer to handle Decimal, Date, Time and other types
         def json_serial(obj):
             from datetime import datetime, date, time
             from decimal import Decimal
@@ -434,11 +388,10 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
         try:
-            # We use json.dumps manually to apply the default serializer
             json_payload = json.dumps({'data': data}, default=json_serial)
             resp = requests.post(url, data=json_payload, headers={**headers, 'Content-Type': 'application/json'}, timeout=30)
             resp.raise_for_status()
-            self.log(f"Выгрузка успешна: {len(data)} таблиц")
+            self.log(f"Выгрузка успешна: {len(data)} объектов")
         except Exception as e:
             self.log(f"Ошибка выгрузки на Railway: {e}")
 
@@ -449,16 +402,11 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             resp = requests.get(url, headers=headers, timeout=10)
             resp.raise_for_status()
             cmd = resp.json()
-            command_text = cmd.get('command')
-            if command_text == 'full_sync':
-                self.log("Получена команда ПОЛНАЯ СИНХРОНИЗАЦИЯ. Сброс состояния...")
+            if cmd.get('command') == 'full_sync':
+                self.log("Команда: Полная синхронизация. Сброс состояния...")
                 self.state = {}
                 self.save_state()
-            elif command_text == 'restart':
-                self.log("Получена команда RESTART. Пожалуйста, перезапустите приложение вручную.")
-            elif command_text == 'sync_period':
-                print(f"Received force sync command for {cmd.get('params')}")
-        except Exception as e:
+        except:
             pass
 
     def send_heartbeat(self):
