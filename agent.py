@@ -243,8 +243,8 @@ class ExtractorAgent:
             self.save_state()
 
     def upload_to_railway(self, data):
-        url = f"{self.config['railway']['url'].rstrip('/')}/api/extractor/sync"
-        headers = {'x-extractor-token': self.config['railway']['token']}
+        url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/sync"
+        headers = {'x-extractor-token': self.config['railway']['token'].strip()}
         
         # Custom JSON serializer to handle Decimal, Date, Time and other types
         def json_serial(obj):
@@ -266,8 +266,8 @@ class ExtractorAgent:
             self.log(f"Ошибка выгрузки на Railway: {e}")
 
     def check_commands(self):
-        url = f"{self.config['railway']['url'].rstrip('/')}/api/extractor/command"
-        headers = {'x-extractor-token': self.config['railway']['token']}
+        url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/command"
+        headers = {'x-extractor-token': self.config['railway']['token'].strip()}
         try:
             resp = requests.get(url, headers=headers, timeout=10)
             resp.raise_for_status()
@@ -285,8 +285,8 @@ class ExtractorAgent:
             pass
 
     def send_heartbeat(self):
-        url = f"{self.config['railway']['url'].rstrip('/')}/api/extractor/heartbeat"
-        headers = {'x-extractor-token': self.config['railway']['token']}
+        url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/heartbeat"
+        headers = {'x-extractor-token': self.config['railway']['token'].strip()}
         try:
             requests.post(url, json={'status': 'online', 'version': '1.0.0'}, headers=headers, timeout=5)
         except:
