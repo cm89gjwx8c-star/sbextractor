@@ -94,9 +94,9 @@ class ExtractorAgent:
         query_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         sql_text = """SELECT 
-    u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM,
+    u.UCHET_ID as ID, COALESCE(t.FN_TABLE, 'НЕТ СТОЛА') as TABLE_NUM,
     u.FD_START as START_TIME, u.FD_END as END_TIME,
-    u.FN_TIME as DURATION_MINS, c.FC_NAME as CLIENT_NAME,
+    u.FN_TIME as DURATION_MINS, COALESCE(c.FC_NAME, 'УДАЛЁН') as CLIENT_NAME,
     u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED
 FROM TUCHET u
 LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
@@ -209,7 +209,25 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             while True:
                 last_id = self.state.get('JOINED_BILLING', 0)
                 
-                query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID > ? ORDER BY u.UCHET_ID ASC ROWS 1 TO {batch_size}"
+                query = f"""
+                    SELECT 
+                        u.UCHET_ID as ID,
+                        COALESCE(CAST(t.FN_TABLE AS VARCHAR(10)), 'НЕТ СТОЛА') as TABLE_NUM,
+                        u.FD_START as START_TIME,
+                        u.FD_END as END_TIME,
+                        u.FN_TIME as DURATION_MINS,
+                        u.FN_RULE as DISCOUNT_PERCENT,
+                        COALESCE(c.FC_NAME, 'УДАЛЁН') as CLIENT_NAME,
+                        u.FN_SUMMA1 as SUM_BASE,
+                        u.FN_SUMMA as SUM_WITH_DISCOUNT,
+                        u.FN_TAR as TARIFF_APPLIED
+                    FROM TUCHET u
+                    LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
+                    LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID
+                    WHERE u.UCHET_ID > ?
+                    ORDER BY u.UCHET_ID ASC
+                    ROWS 1 TO {batch_size}
+                """
                 
                 cur.execute(query, (last_id,))
                 columns = [column[0].upper() for column in cur.description]
