@@ -77,6 +77,18 @@ class ExtractorAgent:
         self.rw_token_var = tk.StringVar(value=self.config['railway']['token'])
         ttk.Entry(rw_frame, textvariable=self.rw_token_var, width=50).grid(row=1, column=1, padx=5, pady=2)
 
+        # Sync Settings
+        sync_frame = ttk.LabelFrame(self.root, text="Настройки синхронизации")
+        sync_frame.pack(fill="x", padx=10, pady=5)
+
+        ttk.Label(sync_frame, text="Интервал (сек):").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        self.sync_interval_var = tk.StringVar(value=str(self.config['sync'].get('interval_seconds', 60)))
+        ttk.Entry(sync_frame, textvariable=self.sync_interval_var, width=10).grid(row=0, column=1, sticky="w", padx=5, pady=2)
+
+        ttk.Label(sync_frame, text="Записей за раз:").grid(row=0, column=2, sticky="w", padx=5, pady=2)
+        self.sync_batch_var = tk.StringVar(value=str(self.config['sync'].get('batch_size', 1000)))
+        ttk.Entry(sync_frame, textvariable=self.sync_batch_var, width=10).grid(row=0, column=3, sticky="w", padx=5, pady=2)
+
         # SQL Query Display (Read-only)
         query_frame = ttk.LabelFrame(self.root, text="Текущий SQL запрос (Биллинг)")
         query_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -140,11 +152,16 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         self.config['railway']['url'] = self.rw_url_var.get()
         self.config['railway']['token'] = self.rw_token_var.get()
         
+        try:
+            self.config['sync']['interval_seconds'] = int(self.sync_interval_var.get())
+            self.config['sync']['batch_size'] = int(self.sync_batch_var.get())
+        except ValueError:
+            self.log("Ошибка: интервал и размер пакета должны быть числами")
+
         # Selected tables are now handled implicitly by the code logic
         # self.config['sync']['tables'] = ...
         
         self.save_config()
-        messagebox.showinfo("Готово", "Настройки сохранены")
 
     def toggle_sync(self):
         if not self.running:
@@ -313,7 +330,8 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
         for table in self.config['sync']['tables']:
             count_in_table = 0
-            # Fetch in batches of 1000 to catch up faster
+            # Fetch in batches to catch up faster
+            batch_size = self.config['sync'].get('batch_size', 1000)
             while True:
                 last_id = self.state.get(table, 0)
                 # For tables without ID, we use a special state flag 'COMPLETED'
@@ -336,7 +354,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 
                 try:
                     if id_col:
-                        cur.execute(f"SELECT FIRST 1000 * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
+                        cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
                     else:
                         # If no ID column is found, we can only safely do a one-time full sync
                         self.log(f"Таблица {table}: Колонка ID не определена. Доступные колонки: {', '.join(columns[:10])}...")
@@ -363,11 +381,11 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         break
                     
                     count_in_table += len(rows)
-                    if len(rows) < 1000:
+                    if len(rows) < batch_size:
                         break
                     
-                    if count_in_table >= 5000:
-                        self.log(f"Таблица {table}: Промежуточный лимит 5000 достигнут")
+                    if count_in_table >= (batch_size * 5):
+                        self.log(f"Таблица {table}: Промежуточный лимит {batch_size * 5} достигнут")
                         break
                         
                 except Exception as e:
