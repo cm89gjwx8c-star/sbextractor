@@ -167,6 +167,9 @@ class ExtractorAgent:
                 messagebox.showwarning("Внимание", "Заполните настройки перед запуском")
                 return
             
+            self.running = True
+            self.start_btn.config(text="ОСТАНОВИТЬ СИНХРОНИЗАЦИЮ")
+            self.status_var.set("Статус: Работает")
             self.log("Синхронизация запущена")
             self.sync_thread = threading.Thread(target=self.sync_loop, daemon=True)
             self.sync_thread.start()
@@ -183,7 +186,7 @@ class ExtractorAgent:
                 self.check_commands()
                 self.send_heartbeat()
             except Exception as e:
-                print(f"Sync error: {e}")
+                self.log(f"Критическая ошибка цикла: {e}")
             
             for _ in range(self.config['sync']['interval_seconds']):
                 if not self.running: break
@@ -247,7 +250,7 @@ class ExtractorAgent:
             resp.raise_for_status()
             print(f"Uploaded {len(data)} tables data")
         except Exception as e:
-            print(f"Upload failed: {e}")
+            self.log(f"Ошибка выгрузки на Railway: {e}")
 
     def check_commands(self):
         url = f"{self.config['railway']['url'].rstrip('/')}/api/extractor/command"
