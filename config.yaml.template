@@ -1,0 +1,14 @@
+db:
+  path: "C:\\softbilling\\BILL.GDB"
+  user: "SYSDBA"
+  password: "masterkey"
+
+railway:
+  url: "https://fortuna-dashboard.railway.app"
+  token: "fortuna-extractor-secret-123"
+
+sync:
+  interval_seconds: 60
+  tables:
+    - BILLIARD_RECORDS
+    - BAR_SALES
