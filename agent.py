@@ -134,6 +134,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         self.log_area.insert(tk.END, f"[{timestamp}] {message}\n")
         self.log_area.see(tk.END)
         self.log_area.config(state='disabled')
+        # print (removed to avoid cluttering in production environment if needed, but keeping for dev)
         print(f"[{timestamp}] {message}")
 
     def browse_db(self):
@@ -157,9 +158,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             self.config['sync']['batch_size'] = int(self.sync_batch_var.get())
         except ValueError:
             self.log("Ошибка: интервал и размер пакета должны быть числами")
-
-        # Selected tables are now handled implicitly by the code logic
-        # self.config['sync']['tables'] = ...
         
         self.save_config()
 
