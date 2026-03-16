@@ -221,19 +221,22 @@ class ExtractorAgent:
                 columns = [column[0].upper() for column in cur.description]
                 
                 # Extended ID detection to include common Firebird/Application patterns
-                id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID']), None)
+                id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
                 
                 # If still None, look for any column starting with ID_ or ending with _ID
                 if not id_col:
                     id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
 
+                # Fallback: if there is exactly one column that is integer type, it's likely the ID
+                # (We can't easily check type here without another query, but we can try common prefixes)
+                
                 try:
                     if id_col:
                         cur.execute(f"SELECT FIRST 1000 * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
                     else:
                         # If no ID column is found, we can only safely do a one-time full sync
-                        self.log(f"Таблица {table}: Колонка ID не определена. Доступные колонки: {', '.join(columns)}")
-                        self.log(f"Таблица {table}: Выполняю разовую полную выгрузку...")
+                        self.log(f"Таблица {table}: Колонка ID не определена. Доступные колонки: {', '.join(columns[:10])}...")
+                        self.log(f"Таблица {table}: Выполняю разовую выгрузку...")
                         cur.execute(f"SELECT * FROM {table}")
                     
                     raw_rows = cur.fetchall()
