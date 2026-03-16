@@ -9,6 +9,7 @@ import time
 import threading
 from datetime import datetime
 import sys
+import os
 from PIL import Image, ImageDraw
 import pystray
 
@@ -17,6 +18,9 @@ STATE_FILE = 'state.json'
 
 class ExtractorAgent:
     def __init__(self, autostart=False):
+        self.lock_file = 'agent.lock'
+        self.check_single_instance()
+        
         self.config = self.load_config()
         self.state = self.load_state()
         self.running = False
@@ -60,6 +64,18 @@ class ExtractorAgent:
         with open(STATE_FILE, 'w') as f:
             json.dump(self.state, f)
 
+    def check_single_instance(self):
+        # Very simple lock file check for Windows/macOS
+        if os.path.exists(self.lock_file):
+            try:
+                os.remove(self.lock_file) # Try to remove it
+            except:
+                messagebox.showerror("Ошибка", "Экстрактор уже запущен!")
+                sys.exit(1)
+        
+        with open(self.lock_file, 'w') as f:
+            f.write(str(os.getpid()))
+
     def setup_tray(self):
         # Create a simple icon image
         width = 64
@@ -90,10 +106,15 @@ class ExtractorAgent:
 
     def quit_app(self):
         self.running = False
-        if self.tray_icon:
-            self.tray_icon.stop()
-        self.root.quit()
-        sys.exit(0)
+        try:
+            if self.tray_icon:
+                self.tray_icon.stop()
+            if os.path.exists(self.lock_file):
+                os.remove(self.lock_file)
+        except:
+            pass
+        self.root.destroy()
+        os._exit(0) # Force exit to kill all threads
 
     def setup_ui(self):
         # Database Settings
