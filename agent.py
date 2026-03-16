@@ -96,8 +96,7 @@ class ExtractorAgent:
         sql_text = """SELECT 
     u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM,
     u.FD_START as START_TIME, u.FD_END as END_TIME,
-    u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT,
-    c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE,
+    u.FN_TIME as DURATION_MINS, c.FC_NAME as CLIENT_NAME,
     u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED
 FROM TUCHET u
 LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
@@ -142,6 +141,10 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         if filename:
             self.db_path_var.set(filename)
 
+    def fetch_tables(self):
+        # Deprecated: Selection removed from UI
+        pass
+
     def save_settings(self):
         self.config['db']['path'] = self.db_path_var.get()
         self.config['db']['user'] = self.db_user_var.get()
@@ -154,6 +157,9 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             self.config['sync']['batch_size'] = int(self.sync_batch_var.get())
         except ValueError:
             self.log("Ошибка: интервал и размер пакета должны быть числами")
+
+        # Selected tables are now handled implicitly by the code logic
+        # self.config['sync']['tables'] = ...
         
         self.save_config()
 
@@ -203,25 +209,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             while True:
                 last_id = self.state.get('JOINED_BILLING', 0)
                 
-                query = f"""
-                    SELECT 
-                        u.UCHET_ID as ID,
-                        t.FN_TABLE as TABLE_NUM,
-                        u.FD_START as START_TIME,
-                        u.FD_END as END_TIME,
-                        u.FN_TIME as DURATION_MINS,
-                        u.FN_RULE as DISCOUNT_PERCENT,
-                        c.FC_NAME as CLIENT_NAME,
-                        u.FN_SUMMA1 as SUM_BASE,
-                        u.FN_SUMMA as SUM_WITH_DISCOUNT,
-                        u.FN_TAR as TARIFF_APPLIED
-                    FROM TUCHET u
-                    LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
-                    LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID
-                    WHERE u.UCHET_ID > ?
-                    ORDER BY u.UCHET_ID ASC
-                    ROWS 1 TO {batch_size}
-                """
+                query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID > ? ORDER BY u.UCHET_ID ASC ROWS 1 TO {batch_size}"
                 
                 cur.execute(query, (last_id,))
                 columns = [column[0].upper() for column in cur.description]
@@ -242,10 +230,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                     sum_base = float(r['SUM_BASE'] or 0)
                     sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
                     
-                    # Safe null handling as requested
-                    client_name = r['CLIENT_NAME'] if r['CLIENT_NAME'] else 'УДАЛЁН'
-                    table_num_val = str(r['TABLE_NUM']) if r['TABLE_NUM'] is not None else 'НЕТ СТОЛА'
-                    
                     dt_start = start_time
                     if isinstance(dt_start, str):
                         try:
@@ -260,11 +244,12 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                     start_hour = dt_start.hour
                     discount_lost = round(sum_base - sum_with_discount, 2)
                     
-                    table_category = self.get_table_category(r['TABLE_NUM'])
+                    table_num = r['TABLE_NUM']
+                    table_category = self.get_table_category(table_num)
 
                     processed_records.append({
                         'id': id_val,
-                        'tableId': table_num_val,
+                        'tableId': str(table_num),
                         'tableCategory': table_category,
                         'startTime': start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time),
                         'endTime': end_time.isoformat() if end_time and hasattr(end_time, 'isoformat') else str(end_time),
@@ -275,7 +260,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         'startHour': start_hour,
                         'durationMins': int(r['DURATION_MINS'] or 0),
                         'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
-                        'client': client_name,
+                        'client': r['CLIENT_NAME'] or 'Гость без карты',
                         'sumWithDiscount': sum_with_discount,
                         'sumBase': sum_base,
                         'discountLost': discount_lost,
@@ -337,6 +322,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
             batch_size = self.config['sync'].get('batch_size', 1000)
             for table in tables:
+                count_in_table = 0
                 while True:
                     last_id = self.state.get(table, 0)
                     if last_id == 'COMPLETED':
@@ -352,6 +338,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         if id_col:
                             cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
                         else:
+                            self.log(f"Таблица {table}: Колонка ID не найдена, выполняю разовую выгрузку")
                             cur.execute(f"SELECT * FROM {table}")
                         
                         raw_rows = cur.fetchall()
@@ -363,13 +350,19 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         sync_data.append({'table': table, 'records': rows})
                         
                         if id_col:
-                            self.state[table] = max(r[id_col] for r in rows)
+                            new_last_id = max(r[id_col] for r in rows)
+                            self.state[table] = new_last_id
                         else:
                             self.state[table] = 'COMPLETED'
+                            count_in_table += len(rows)
                             break
                         
+                        count_in_table += len(rows)
                         if len(raw_rows) < batch_size:
                             break
+                        if count_in_table >= (batch_size * 5):
+                            break
+                            
                     except Exception as e:
                         self.log(f"Ошибка при чтении {table}: {e}")
                         break
@@ -398,7 +391,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             json_payload = json.dumps({'data': data}, default=json_serial)
             resp = requests.post(url, data=json_payload, headers={**headers, 'Content-Type': 'application/json'}, timeout=30)
             resp.raise_for_status()
-            self.log(f"Выгрузка успешна: {len(data)} таблиц")
+            self.log(f"Выгрузка успешна: {len(data)} объектов")
         except Exception as e:
             self.log(f"Ошибка выгрузки на Railway: {e}")
 
