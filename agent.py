@@ -223,13 +223,17 @@ class ExtractorAgent:
                 # Extended ID detection to include common Firebird/Application patterns
                 id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID']), None)
                 
+                # If still None, look for any column starting with ID_ or ending with _ID
+                if not id_col:
+                    id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
+
                 try:
                     if id_col:
                         cur.execute(f"SELECT FIRST 1000 * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
                     else:
                         # If no ID column is found, we can only safely do a one-time full sync
-                        # to avoid continuous duplication in every cycle.
-                        self.log(f"Таблица {table}: Колонка ID не найдена, выполняю полную выгрузку")
+                        self.log(f"Таблица {table}: Колонка ID не определена. Доступные колонки: {', '.join(columns)}")
+                        self.log(f"Таблица {table}: Выполняю разовую полную выгрузку...")
                         cur.execute(f"SELECT * FROM {table}")
                     
                     raw_rows = cur.fetchall()
@@ -270,7 +274,9 @@ class ExtractorAgent:
         
         if sync_data:
             self.upload_to_railway(sync_data)
-            self.save_state()
+        
+        # Always save state after loop, even if no data was synced, to persist COMPLETED flags
+        self.save_state()
 
     def upload_to_railway(self, data):
         url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/sync"
