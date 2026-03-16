@@ -212,12 +212,12 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 query = f"""
                     SELECT 
                         u.UCHET_ID as ID,
-                        COALESCE(CAST(t.FN_TABLE AS VARCHAR(10)), 'НЕТ СТОЛА') as TABLE_NUM,
+                        t.FN_TABLE as TABLE_NUM,
                         u.FD_START as START_TIME,
                         u.FD_END as END_TIME,
                         u.FN_TIME as DURATION_MINS,
                         u.FN_RULE as DISCOUNT_PERCENT,
-                        COALESCE(c.FC_NAME, 'УДАЛЁН') as CLIENT_NAME,
+                        c.FC_NAME as CLIENT_NAME,
                         u.FN_SUMMA1 as SUM_BASE,
                         u.FN_SUMMA as SUM_WITH_DISCOUNT,
                         u.FN_TAR as TARIFF_APPLIED
@@ -248,6 +248,9 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                     sum_base = float(r['SUM_BASE'] or 0)
                     sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
                     
+                    client_name = r['CLIENT_NAME'] if r['CLIENT_NAME'] else 'УДАЛЁН'
+                    table_num_val = str(r['TABLE_NUM']) if r['TABLE_NUM'] is not None else 'НЕТ СТОЛА'
+                    
                     dt_start = start_time
                     if isinstance(dt_start, str):
                         try:
@@ -262,12 +265,11 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                     start_hour = dt_start.hour
                     discount_lost = round(sum_base - sum_with_discount, 2)
                     
-                    table_num = r['TABLE_NUM']
-                    table_category = self.get_table_category(table_num)
+                    table_category = self.get_table_category(r['TABLE_NUM'])
 
                     processed_records.append({
                         'id': id_val,
-                        'tableId': str(table_num),
+                        'tableId': table_num_val,
                         'tableCategory': table_category,
                         'startTime': start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time),
                         'endTime': end_time.isoformat() if end_time and hasattr(end_time, 'isoformat') else str(end_time),
@@ -278,7 +280,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         'startHour': start_hour,
                         'durationMins': int(r['DURATION_MINS'] or 0),
                         'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
-                        'client': r['CLIENT_NAME'] or 'Гость без карты',
+                        'client': client_name,
                         'sumWithDiscount': sum_with_discount,
                         'sumBase': sum_base,
                         'discountLost': discount_lost,
