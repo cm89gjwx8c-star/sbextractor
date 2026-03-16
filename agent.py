@@ -203,27 +203,31 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             )
             cur = conn.cursor()
             
-            last_id = self.state.get('JOINED_BILLING', 0)
+            total_processed = 0
+            batch_size = self.config['sync'].get('batch_size', 1000)
             
-            query = """
-                SELECT 
-                    u.UCHET_ID as ID,
-                    t.FN_TABLE as TABLE_NUM,
-                    u.FD_START as START_TIME,
-                    u.FD_END as END_TIME,
-                    u.FN_TIME as DURATION_MINS,
-                    u.FN_RULE as DISCOUNT_PERCENT,
-                    c.FC_NAME as CLIENT_NAME,
-                    u.FN_SUMMA1 as SUM_BASE,
-                    u.FN_SUMMA as SUM_WITH_DISCOUNT,
-                    u.FN_TAR as TARIFF_APPLIED
-                FROM TUCHET u
-                LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
-                LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID
-                WHERE u.UCHET_ID > ?
-                ORDER BY u.UCHET_ID ASC
-                ROWS 1 TO 100
-            """
+            while True:
+                last_id = self.state.get('JOINED_BILLING', 0)
+                
+                query = f"""
+                    SELECT 
+                        u.UCHET_ID as ID,
+                        t.FN_TABLE as TABLE_NUM,
+                        u.FD_START as START_TIME,
+                        u.FD_END as END_TIME,
+                        u.FN_TIME as DURATION_MINS,
+                        u.FN_RULE as DISCOUNT_PERCENT,
+                        c.FC_NAME as CLIENT_NAME,
+                        u.FN_SUMMA1 as SUM_BASE,
+                        u.FN_SUMMA as SUM_WITH_DISCOUNT,
+                        u.FN_TAR as TARIFF_APPLIED
+                    FROM TUCHET u
+                    LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
+                    LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID
+                    WHERE u.UCHET_ID > ?
+                    ORDER BY u.UCHET_ID ASC
+                    ROWS 1 TO {batch_size}
+                """
             
             cur.execute(query, (last_id,))
             columns = [column[0].upper() for column in cur.description]
@@ -289,7 +293,19 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_records}])
             self.state['JOINED_BILLING'] = last_id
             self.save_state()
-            self.log(f"Синхронизировано {len(processed_records)} записей биллинга (Joined)")
+            total_processed += len(processed_records)
+            
+            # If we got less than batch_size, we caught up
+            if len(raw_rows) < batch_size:
+                break
+            
+            # Limit to avoid starvation of other sync processes
+            if total_processed >= (batch_size * 5):
+                self.log(f"Биллинг: Промежуточный лимит {batch_size * 5} достигнут")
+                break
+
+            if total_processed > 0:
+                self.log(f"Синхронизировано {total_processed} записей биллинга (Joined)")
             
             conn.close()
         except Exception as e:
