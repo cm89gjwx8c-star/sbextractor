@@ -208,33 +208,50 @@ class ExtractorAgent:
             return
 
         for table in self.config['sync']['tables']:
-            last_id = self.state.get(table, 0)
+            count_in_table = 0
+            # Fetch in batches of 1000 to catch up faster
+            while True:
+                last_id = self.state.get(table, 0)
+                
+                # Detect primary ID column
+                cur.execute(f"SELECT * FROM {table} WHERE 1=0")
+                columns = [column[0].upper() for column in cur.description]
+                id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID']), None)
+                
+                try:
+                    if id_col:
+                        cur.execute(f"SELECT FIRST 1000 * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
+                    else:
+                        cur.execute(f"SELECT FIRST 1000 * FROM {table}")
+                    
+                    raw_rows = cur.fetchall()
+                    if not raw_rows:
+                        break
+                    
+                    rows = [dict(zip(columns, row)) for row in raw_rows]
+                    sync_data.append({'table': table, 'records': rows})
+                    
+                    if id_col and rows:
+                        new_last_id = max(r[id_col] for r in rows)
+                        self.state[table] = new_last_id
+                    
+                    count_in_table += len(rows)
+                    
+                    # If we got less than 1000, we've caught up for this table
+                    if len(rows) < 1000:
+                        break
+                    
+                    # To avoid massive memory usage or timeout, we limit to 5000 per full sync cycle per table
+                    if count_in_table >= 5000:
+                        self.log(f"Таблица {table}: Промежуточный лимит 5000 достигнут, продолжим в следующем цикле")
+                        break
+                        
+                except Exception as e:
+                    self.log(f"Ошибка при чтении {table}: {e}")
+                    break
             
-            # Detect primary ID column
-            cur.execute(f"SELECT * FROM {table} WHERE 1=0")
-            columns = [column[0].upper() for column in cur.description]
-            id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID']), None)
-            
-            try:
-                if id_col:
-                    cur.execute(f"SELECT FIRST 100 * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
-                else:
-                    cur.execute(f"SELECT FIRST 100 * FROM {table}")
-                
-                raw_rows = cur.fetchall()
-                if not raw_rows:
-                    continue
-                
-                rows = [dict(zip(columns, row)) for row in raw_rows]
-                sync_data.append({'table': table, 'records': rows})
-                
-                if id_col and rows:
-                    new_last_id = max(r[id_col] for r in rows)
-                    self.state[table] = new_last_id
-                
-                self.log(f"Таблица {table}: Найдено {len(rows)} новых записей")
-            except Exception as e:
-                self.log(f"Ошибка при чтении {table}: {e}")
+            if count_in_table > 0:
+                self.log(f"Таблица {table}: Всего обработано {count_in_table} записей")
         
         conn.close()
         
