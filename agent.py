@@ -96,7 +96,8 @@ class ExtractorAgent:
         sql_text = """SELECT 
     u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM,
     u.FD_START as START_TIME, u.FD_END as END_TIME,
-    u.FN_TIME as DURATION_MINS, c.FC_NAME as CLIENT_NAME,
+    u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT,
+    c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE,
     u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED
 FROM TUCHET u
 LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
@@ -177,7 +178,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
     def get_table_category(self, table_num):
         try:
-            num = int(table_num) if table_num is not None else 0
+            num = int(table_num)
             if 1 <= num <= 9: return 'Русский'
             if 10 <= num <= 12: return 'Пул'
             if num in [13, 14]: return 'Теннис'
@@ -188,29 +189,32 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
     def sync_billing(self):
         try:
-            conn = fdb.connect(dsn=self.config['db']['path'], user=self.config['db']['user'], password=self.config['db']['password'], charset='UTF8')
+            conn = fdb.connect(
+                dsn=self.config['db']['path'],
+                user=self.config['db']['user'],
+                password=self.config['db']['password'],
+                charset='UTF8'
+            )
             cur = conn.cursor()
             
-            # Diagnostic: print available columns if it fails
-            try:
-                for t_name in ['TUCHET', 'TCLIENT', 'TTABLE']:
-                    cur.execute(f"SELECT FIRST 1 * FROM {t_name}")
-                    field_names = [col[0].upper() for col in cur.description]
-                    self.log(f"Колонки {t_name}: {', '.join(field_names[:10])}")
-            except Exception as e:
-                self.log(f"Диагностика колонок: {e}")
-
             total_processed = 0
             batch_size = self.config['sync'].get('batch_size', 1000)
             
             while True:
                 last_id = self.state.get('JOINED_BILLING', 0)
                 
-                # Simplified query based on user's confirmed structure
                 query = f"""
                     SELECT 
-                        u.UCHET_ID, t.FN_TABLE, u.FD_START, u.FD_END, u.FN_TIME,
-                        c.FC_NAME, u.FN_SUMMA, u.FN_TAR
+                        u.UCHET_ID as ID,
+                        t.FN_TABLE as TABLE_NUM,
+                        u.FD_START as START_TIME,
+                        u.FD_END as END_TIME,
+                        u.FN_TIME as DURATION_MINS,
+                        u.FN_RULE as DISCOUNT_PERCENT,
+                        c.FC_NAME as CLIENT_NAME,
+                        u.FN_SUMMA1 as SUM_BASE,
+                        u.FN_SUMMA as SUM_WITH_DISCOUNT,
+                        u.FN_TAR as TARIFF_APPLIED
                     FROM TUCHET u
                     LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
                     LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID
@@ -220,7 +224,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 """
                 
                 cur.execute(query, (last_id,))
-                # Normalize column names for easier mapping
                 columns = [column[0].upper() for column in cur.description]
                 raw_rows = cur.fetchall()
                 
@@ -233,21 +236,16 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 for row in raw_rows:
                     r = dict(zip(columns, row))
                     
-                    # Safe mapping with defaults
-                    id_val = r.get('UCHET_ID')
-                    start_time = r.get('FD_START')
-                    end_time = r.get('FD_END')
+                    id_val = r['ID']
+                    start_time = r['START_TIME']
+                    end_time = r['END_TIME']
+                    sum_base = float(r['SUM_BASE'] or 0)
+                    sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
                     
-                    # Fallback for missing relations
-                    client_name = r.get('FC_NAME') if r.get('FC_NAME') else 'УДАЛЁН'
-                    table_num_raw = r.get('FN_TABLE')
-                    table_num_str = str(table_num_raw) if table_num_raw is not None else 'НЕТ СТОЛА'
+                    # Safe null handling as requested
+                    client_name = r['CLIENT_NAME'] if r['CLIENT_NAME'] else 'УДАЛЁН'
+                    table_num_val = str(r['TABLE_NUM']) if r['TABLE_NUM'] is not None else 'НЕТ СТОЛА'
                     
-                    sum_with_discount = float(r.get('FN_SUMMA') or 0)
-                    tariff_applied = float(r.get('FN_TAR') or 0)
-                    duration_mins = int(r.get('FN_TIME') or 0)
-                    
-                    # Date processing
                     dt_start = start_time
                     if isinstance(dt_start, str):
                         try:
@@ -260,11 +258,14 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                     day_of_week = dt_start.strftime('%a').upper()
                     date_formatted = dt_start.strftime('%Y-%m-%d')
                     start_hour = dt_start.hour
+                    discount_lost = round(sum_base - sum_with_discount, 2)
+                    
+                    table_category = self.get_table_category(r['TABLE_NUM'])
 
                     processed_records.append({
                         'id': id_val,
-                        'tableId': table_num_str,
-                        'tableCategory': self.get_table_category(table_num_raw),
+                        'tableId': table_num_val,
+                        'tableCategory': table_category,
                         'startTime': start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time),
                         'endTime': end_time.isoformat() if end_time and hasattr(end_time, 'isoformat') else str(end_time),
                         'month': month,
@@ -272,13 +273,13 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         'dayOfWeek': day_of_week,
                         'dateFormatted': date_formatted,
                         'startHour': start_hour,
-                        'durationMins': duration_mins,
-                        'discountPercent': 0.0,
+                        'durationMins': int(r['DURATION_MINS'] or 0),
+                        'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
                         'client': client_name,
                         'sumWithDiscount': sum_with_discount,
-                        'sumBase': sum_with_discount,
-                        'discountLost': 0.0,
-                        'tariffApplied': tariff_applied,
+                        'sumBase': sum_base,
+                        'discountLost': discount_lost,
+                        'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
                         'is_processed': True
                     })
                     
@@ -291,16 +292,17 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 
                 if len(raw_rows) < batch_size:
                     break
+                
                 if total_processed >= (batch_size * 5):
-                    self.log(f"Биллинг: Лимит пакета достигнут")
+                    self.log(f"Биллинг: Промежуточный лимит {batch_size * 5} достигнут")
                     break
 
             if total_processed > 0:
-                self.log(f"Биллинг: Синхронизировано {total_processed} записей")
+                self.log(f"Синхронизировано {total_processed} записей биллинга (Joined)")
             
             conn.close()
         except Exception as e:
-            self.log(f"Ошибка биллинга: {e}")
+            self.log(f"Ошибка синхронизации биллинга: {e}")
 
     def sync_loop(self):
         while self.running:
@@ -310,7 +312,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 self.check_commands()
                 self.send_heartbeat()
             except Exception as e:
-                self.log(f"Ошибка цикла: {e}")
+                self.log(f"Критическая ошибка цикла: {e}")
             
             interval = int(self.config['sync'].get('interval_seconds', 60))
             for _ in range(interval):
@@ -319,24 +321,32 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
     def perform_sync(self):
         try:
-            conn = fdb.connect(dsn=self.config['db']['path'], user=self.config['db']['user'], password=self.config['db']['password'], charset='UTF8')
+            conn = fdb.connect(
+                dsn=self.config['db']['path'],
+                user=self.config['db']['user'],
+                password=self.config['db']['password'],
+                charset='UTF8'
+            )
             cur = conn.cursor()
+            
+            sync_data = []
             tables = self.config['sync'].get('tables', [])
             if not tables:
                 conn.close()
                 return
 
             batch_size = self.config['sync'].get('batch_size', 1000)
-            sync_data = []
             for table in tables:
                 while True:
                     last_id = self.state.get(table, 0)
-                    if last_id == 'COMPLETED': break
+                    if last_id == 'COMPLETED':
+                        break
 
                     cur.execute(f"SELECT * FROM {table} WHERE 1=0")
-                    cols = [c[0].upper() for c in cur.description]
-                    id_col = next((c for c in cols if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
-                    if not id_col: id_col = next((c for c in cols if c.startswith('ID_') or c.endswith('_ID')), None)
+                    columns = [column[0].upper() for column in cur.description]
+                    id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
+                    if not id_col:
+                        id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
 
                     try:
                         if id_col:
@@ -344,12 +354,12 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                         else:
                             cur.execute(f"SELECT * FROM {table}")
                         
-                        raw = cur.fetchall()
-                        if not raw:
+                        raw_rows = cur.fetchall()
+                        if not raw_rows:
                             if not id_col: self.state[table] = 'COMPLETED'
                             break
                         
-                        rows = [dict(zip(cols, r)) for r in raw]
+                        rows = [dict(zip(columns, row)) for row in raw_rows]
                         sync_data.append({'table': table, 'records': rows})
                         
                         if id_col:
@@ -358,47 +368,61 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                             self.state[table] = 'COMPLETED'
                             break
                         
-                        if len(raw) < batch_size: break
+                        if len(raw_rows) < batch_size:
+                            break
                     except Exception as e:
-                        self.log(f"Ошибка {table}: {e}")
+                        self.log(f"Ошибка при чтении {table}: {e}")
                         break
             
             conn.close()
-            if sync_data: self.upload_to_railway(sync_data)
+            if sync_data:
+                self.upload_to_railway(sync_data)
             self.save_state()
         except Exception as e:
-            self.log(f"Ошибка синхронизации: {e}")
+            self.log(f"Ошибка синхронизации таблиц: {e}")
 
     def upload_to_railway(self, data):
         url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/sync"
         headers = {'x-extractor-token': self.config['railway']['token'].strip()}
+        
         def json_serial(obj):
+            from datetime import datetime, date, time
             from decimal import Decimal
-            from datetime import date, time, datetime
-            if isinstance(obj, (datetime, date, time)): return obj.isoformat()
-            if isinstance(obj, Decimal): return float(obj)
-            raise TypeError(f"Type {obj.__class__.__name__} not serializable")
+            if isinstance(obj, (datetime, date, time)):
+                return obj.isoformat()
+            if isinstance(obj, Decimal):
+                return float(obj)
+            raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
         try:
-            payload = json.dumps({'data': data}, default=json_serial)
-            requests.post(url, data=payload, headers={**headers, 'Content-Type': 'application/json'}, timeout=30).raise_for_status()
-            self.log(f"Выгрузка: {len(data)} таблиц")
+            json_payload = json.dumps({'data': data}, default=json_serial)
+            resp = requests.post(url, data=json_payload, headers={**headers, 'Content-Type': 'application/json'}, timeout=30)
+            resp.raise_for_status()
+            self.log(f"Выгрузка успешна: {len(data)} таблиц")
         except Exception as e:
-            self.log(f"Ошибка Railway: {e}")
+            self.log(f"Ошибка выгрузки на Railway: {e}")
 
     def check_commands(self):
         url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/command"
+        headers = {'x-extractor-token': self.config['railway']['token'].strip()}
         try:
-            resp = requests.get(url, headers={'x-extractor-token': self.config['railway']['token'].strip()}, timeout=10)
-            if resp.status_code == 200 and resp.json().get('command') == 'full_sync':
-                self.log("Команда: Полная синхронизация")
-                self.state = {}; self.save_state()
-        except: pass
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            cmd = resp.json()
+            if cmd.get('command') == 'full_sync':
+                self.log("Команда: Полная синхронизация. Сброс состояния...")
+                self.state = {}
+                self.save_state()
+        except:
+            pass
 
     def send_heartbeat(self):
         url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/heartbeat"
-        try: requests.post(url, json={'status': 'online'}, headers={'x-extractor-token': self.config['railway']['token'].strip()}, timeout=5)
-        except: pass
+        headers = {'x-extractor-token': self.config['railway']['token'].strip()}
+        try:
+            requests.post(url, json={'status': 'online', 'version': '1.0.0'}, headers=headers, timeout=5)
+        except:
+            pass
 
 if __name__ == "__main__":
     app = ExtractorAgent()
