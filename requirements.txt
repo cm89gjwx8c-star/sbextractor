@@ -1,4 +1,4 @@
 fdb
 requests
 pyyaml
--e .
+
