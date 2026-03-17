@@ -11,6 +11,7 @@ from datetime import datetime
 import sys
 from PIL import Image, ImageDraw
 import pystray
+import subprocess
 
 CONFIG_FILE = 'config.yaml'
 STATE_FILE = 'state.json'
@@ -154,7 +155,21 @@ class ExtractorAgent:
                 os.remove(self.lock_file)
         except:
             pass
-        os.execv(sys.executable, ['python'] + sys.argv)
+        
+        # Prepare arguments, ensuring --autostart is included to resume sync
+        args = sys.argv[:]
+        if "--autostart" not in args:
+            args.append("--autostart")
+            
+        if getattr(sys, 'frozen', False):
+            # Running as PyInstaller EXE
+            subprocess.Popen([sys.executable] + args[1:])
+        else:
+            # Running as Python script
+            subprocess.Popen([sys.executable] + args)
+            
+        self.root.destroy()
+        os._exit(0)
 
     def setup_ui(self):
         # Database Settings
