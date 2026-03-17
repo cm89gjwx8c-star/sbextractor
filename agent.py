@@ -149,6 +149,7 @@ class ExtractorAgent:
     def restart_agent(self):
         self.log("Выполняется перезапуск агента через 2 секунды...")
         self.running = False # Stop sync loop
+        
         try:
             if self.tray_icon:
                 self.tray_icon.stop()
@@ -157,36 +158,42 @@ class ExtractorAgent:
         except:
             pass
         
-        # Prepare arguments
+        # Determine arguments
         if getattr(sys, 'frozen', False):
-            # For EXE: sys.argv[0] is the EXE itself
             args = sys.argv[1:]
         else:
-            # For script: we want to keep all args including script name
             args = sys.argv[:]
             
         if "--autostart" not in args:
             args.append("--autostart")
             
         try:
-            # IMPORTANT: For PyInstaller EXEs, we MUST clear _MEIPASS 
-            # and other env vars so the new process extracts itself to a NEW folder.
+            # VERY AGGRESSIVE ENV CLEANING
+            # We must remove everything related to the current PyInstaller instance
             new_env = os.environ.copy()
-            for key in ['_MEIPASS', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH']:
-                if key in new_env:
+            mei_path = getattr(sys, '_MEIPASS', '')
+            
+            # Remove any keys that look like PyInstaller variables
+            for key in list(new_env.keys()):
+                if 'MEI' in key.upper():
                     del new_env[key]
+            
+            # Clean PATH of any references to the current temp dir
+            if mei_path and 'PATH' in new_env:
+                paths = new_env['PATH'].split(os.pathsep)
+                new_env['PATH'] = os.pathsep.join([p for p in paths if mei_path not in p])
 
             if sys.platform == 'win32':
-                # DELAYED RESTART: Use ping to wait 2 seconds, then start.
+                # Detailed Windows detached restart
                 exe = sys.executable
                 params = ' '.join(f'"{a}"' for a in args)
-                # cmd /c "ping 127.0.0.1 -n 3 > nul && start "" "exe" params"
-                full_cmd = f'ping 127.0.0.1 -n 3 > nul && start "" "{exe}" {params}'
+                # We use cmd /c with local 'set' to be extra sure
+                full_cmd = f'cmd /c "set _MEIPASS= && ping 127.0.0.1 -n 3 > nul && start "" "{exe}" {params}"'
                 
-                # Using CREATE_NO_WINDOW (0x08000000)
-                subprocess.Popen(full_cmd, shell=True, env=new_env, creationflags=0x08000000)
+                # Use CREATE_NO_WINDOW (0x08000000) and DETACHED_PROCESS (0x00000008)
+                subprocess.Popen(full_cmd, shell=False, env=new_env, creationflags=0x08000008 | 0x08000000)
             else:
-                # Unix-like restart
+                # Unix restart
                 subprocess.Popen([sys.executable] + args, env=new_env, start_new_session=True)
         except Exception as e:
             self.log(f"Ошибка при подготовке перезапуска: {e}")
