@@ -169,22 +169,25 @@ class ExtractorAgent:
             args.append("--autostart")
             
         try:
+            # IMPORTANT: For PyInstaller EXEs, we MUST clear _MEIPASS 
+            # and other env vars so the new process extracts itself to a NEW folder.
+            new_env = os.environ.copy()
+            for key in ['_MEIPASS', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH']:
+                if key in new_env:
+                    del new_env[key]
+
             if sys.platform == 'win32':
-                # DELAYED RESTART: Use ping to wait 2-3 seconds, then start the exe.
-                # This gives the current process enough time to exit and clean up its TEMP folder.
+                # DELAYED RESTART: Use ping to wait 2 seconds, then start.
                 exe = sys.executable
                 params = ' '.join(f'"{a}"' for a in args)
                 # cmd /c "ping 127.0.0.1 -n 3 > nul && start "" "exe" params"
                 full_cmd = f'ping 127.0.0.1 -n 3 > nul && start "" "{exe}" {params}'
                 
-                # Using CREATE_NO_WINDOW (0x08000000) to keep it silent
-                subprocess.Popen(full_cmd, shell=True, creationflags=0x08000000)
+                # Using CREATE_NO_WINDOW (0x08000000)
+                subprocess.Popen(full_cmd, shell=True, env=new_env, creationflags=0x08000000)
             else:
-                # Unix-like restart (usually doesn't have the temp dir lock issue)
-                if getattr(sys, 'frozen', False):
-                    subprocess.Popen([sys.executable] + args, start_new_session=True)
-                else:
-                    subprocess.Popen([sys.executable] + args, start_new_session=True)
+                # Unix-like restart
+                subprocess.Popen([sys.executable] + args, env=new_env, start_new_session=True)
         except Exception as e:
             self.log(f"Ошибка при подготовке перезапуска: {e}")
             
