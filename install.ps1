@@ -1,50 +1,66 @@
-# sbextractor Installer for Windows
+# Firebird Extractor One-Click Installer
+# Run: powershell -ExecutionPolicy Bypass -File install.ps1
 
-$InstallDir = "$env:USERPROFILE\sbextractor"
-$ExeUrl = "https://github.com/USERNAME/REPO/releases/latest/download/sbextractor.exe" # Placeholder URL
+$ErrorActionPreference = "Stop"
 
-function Show-Notification {
-    param($Title, $Message)
-    Write-Host "$Title: $Message"
+$REPO_USER = "cm89gjwx8c-star"
+$REPO_NAME = "sbextractor"
+$INSTALL_DIR = "$env:LOCALAPPDATA\sbextractor"
+$ZIP_URL = "https://github.com/$REPO_USER/$REPO_NAME/raw/main/release.zip"
+
+Write-Host "--- Firebird Extractor Installer ---" -ForegroundColor Cyan
+
+# 1. Prepare Directory
+if (!(Test-Path $INSTALL_DIR)) {
+    Write-Host "Creating installation directory: $INSTALL_DIR"
+    New-Item -ItemType Directory -Path $INSTALL_DIR | Out-Null
 }
 
-# 1. Create Installation Directory
-if (!(Test-Path $InstallDir)) {
-    New-Item -ItemType Directory -Path $InstallDir
-    Write-Host "Created installation directory: $InstallDir"
-}
+# 2. Download Release
+Write-Host "Downloading latest release from GitHub..." -ForegroundColor Yellow
+$zipPath = Join-Path $env:TEMP "sbextractor_release.zip"
+Invoke-WebRequest -Uri $ZIP_URL -OutFile $zipPath
 
-# 2. Download Executable
-# NOTE: In a real scenario, this would be a URL to the compiled EXE.
-# For now, we assume the user has the EXE or we provide instructions.
-Write-Host "Downloading sbextractor.exe..."
-# Invoke-WebRequest -Uri $ExeUrl -OutFile "$InstallDir\sbextractor.exe"
+# 3. Extract
+Write-Host "Extracting files..." -ForegroundColor Yellow
+Expand-Archive -Path $zipPath -DestinationPath $INSTALL_DIR -Force
+Remove-Item $zipPath
 
-# 3. Create initial config.yaml if it doesn't exist
-$ConfigPath = "$InstallDir\config.yaml"
-if (!(Test-Path $ConfigPath)) {
-    $DefaultConfig = @"
-db:
-  path: "C:\softbilling\BILL.GDB"
-  user: "SYSDBA"
-  password: "masterkey"
+# 4. Initial Configuration (if missing)
+$configPath = Join-Path $INSTALL_DIR "config.yaml"
+if (!(Test-Path $configPath)) {
+    Write-Host "Initializing configuration..." -ForegroundColor Yellow
+    # Create basic config from template or default values
+    $defaultConfig = @"
+database:
+  path: 'C:\softbilling\bill.gdb'
+  user: 'SYSDBA'
+  password: 'masterkey'
 railway:
-  url: "https://fortuna-dashboard.railway.app"
-  token: "fortuna-extractor-secret-123"
+  url: 'https://vash-proekt.railway.app'
 sync:
   interval_seconds: 60
-  tables: []
+security:
+  pin_code: '0000'
 "@
-    Set-Content -Path $ConfigPath -Value $DefaultConfig
-    Write-Host "Created default config.yaml"
+    Set-Content -Path $configPath -Value $defaultConfig
 }
 
-# 4. Create Desktop Shortcut
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\sbextractor.lnk")
-$Shortcut.TargetPath = "$InstallDir\sbextractor.exe"
-$Shortcut.WorkingDirectory = $InstallDir
-$Shortcut.Save()
-Write-Host "Created Desktop shortcut"
+# 5. Set up Auto-start
+Write-Host "Setting up Windows Startup..." -ForegroundColor Yellow
+Set-Location $INSTALL_DIR
+try {
+    # Run the existing auto-start script
+    cmd.exe /c "install_autostart.bat"
+} catch {
+    Write-Host "Warning: Could not set up autostart automatically." -ForegroundColor Red
+}
 
-Write-Host "Installation complete! Please run sbextractor from your desktop."
+# 6. Launch App (Hidden Mode)
+Write-Host "Launching Firebird Extractor in background..." -ForegroundColor Green
+$exePath = Join-Path $INSTALL_DIR "sbextractor.exe"
+Start-Process -FilePath $exePath -ArgumentList "--autostart"
+
+Write-Host "`nInstallation Complete! The extractor is now running in the system tray." -ForegroundColor Green
+Write-Host "You can find the installation folder at: $INSTALL_DIR"
+pause
