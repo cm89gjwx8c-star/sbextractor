@@ -148,6 +148,7 @@ class ExtractorAgent:
 
     def restart_agent(self):
         self.log("Выполняется перезапуск агента...")
+        self.running = False # Stop the sync loop
         try:
             if self.tray_icon:
                 self.tray_icon.stop()
@@ -156,17 +157,24 @@ class ExtractorAgent:
         except:
             pass
         
-        # Prepare arguments, ensuring --autostart is included to resume sync
+        # Prepare arguments, ensuring --autostart is included
         args = sys.argv[:]
         if "--autostart" not in args:
             args.append("--autostart")
             
+        # Use detached process flags on Windows to avoid handle inheritance
+        # and allow the old process's temp dir to be cleaned up.
+        popen_kwargs = {'close_fds': True}
+        if sys.platform == 'win32':
+            # 0x00000008 = DETACHED_PROCESS
+            popen_kwargs['creationflags'] = 0x00000008
+            
         if getattr(sys, 'frozen', False):
             # Running as PyInstaller EXE
-            subprocess.Popen([sys.executable] + args[1:])
+            subprocess.Popen([sys.executable] + args[1:], **popen_kwargs)
         else:
             # Running as Python script
-            subprocess.Popen([sys.executable] + args)
+            subprocess.Popen([sys.executable] + args, **popen_kwargs)
             
         self.root.destroy()
         os._exit(0)
