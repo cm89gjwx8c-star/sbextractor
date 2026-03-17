@@ -147,7 +147,7 @@ class ExtractorAgent:
         os._exit(0)
 
     def restart_agent(self):
-        self.log("Безопасный перезапуск (Powershell) через 5 секунд...")
+        self.log("Глубокая очистка и перезапуск (10 сек)...")
         self.running = False
         
         try:
@@ -157,7 +157,7 @@ class ExtractorAgent:
                 os.remove(self.lock_file)
         except:
             pass
-        
+
         # Determine arguments
         if getattr(sys, 'frozen', False):
             args = sys.argv[1:]
@@ -166,34 +166,50 @@ class ExtractorAgent:
             
         if "--autostart" not in args:
             args.append("--autostart")
-            
+
         try:
+            # VERY CLEAN environment to prevent DLL errors
+            clean_env = {k: v for k, v in os.environ.items() if not k.startswith('_MEI') and k not in ['PYTHONHOME', 'PYTHONPATH']}
+            # Essential Windows vars
+            for k in ['SYSTEMROOT', 'PATH', 'WINDIR', 'SYSTEMDRIVE', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']:
+                if k in os.environ and k not in clean_env:
+                    clean_env[k] = os.environ[k]
+
             if sys.platform == 'win32':
-                # Use Powershell for better encoding (Cyrillic paths) and isolation.
-                exe = sys.executable
-                # Join arguments for Powershell Start-Process
-                params_str = ' '.join([f'"{a}"' for a in args])
+                import ctypes
+                # Use Short Path (8.3) to bypass any encoding/Cyrillic issues in the path
+                def get_short_path(long_path):
+                    try:
+                        buf = ctypes.create_unicode_buffer(1024)
+                        ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 1024)
+                        return buf.value
+                    except:
+                        return long_path
+
+                exe_short = get_short_path(sys.executable)
+                params = ' '.join(f'"{a}"' for a in args)
+                bat_path = os.path.join(os.environ.get('TEMP', '.'), f'restart_fix.bat')
                 
-                # Powershell command: wait, clear env, start process
-                ps_command = (
-                    f"Start-Sleep -s 5; "
-                    f"$env:_MEIPASS=''; $env:PYTHONHOME=''; $env:PYTHONPATH=''; "
-                    f"Start-Process -FilePath '{exe}' -ArgumentList '{params_str}'"
-                )
+                # Write batch file using standard CP1251
+                with open(bat_path, 'w', encoding='cp1251', errors='replace') as f:
+                    f.write(f'@echo off\n')
+                    f.write(f'timeout /t 10 /nobreak > nul\n')
+                    # Force clear vars in the shell as well
+                    f.write(f'set _MEIPASS=\n')
+                    f.write(f'set PYTHONHOME=\n')
+                    f.write(f'set PYTHONPATH=\n')
+                    f.write(f'start /i "" "{exe_short}" {params}\n')
+                    f.write(f'del "%~f0"\n')
                 
-                # Launch Powershell hidden
-                subprocess.Popen(
-                    ['powershell', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', ps_command],
-                    creationflags=0x08000000 # CREATE_NO_WINDOW
-                )
+                # Launch batch file absolutely detached
+                subprocess.Popen(['cmd.exe', '/c', bat_path], 
+                                 env=clean_env,
+                                 creationflags=0x08000000 | 0x00000008) # NO_WINDOW | DETACHED
             else:
                 # Unix restart
-                new_env = os.environ.copy()
-                for key in ['_MEIPASS', 'PYTHONHOME', 'PYTHONPATH']:
-                    new_env.pop(key, None)
-                subprocess.Popen([sys.executable] + args, env=new_env, start_new_session=True)
+                subprocess.Popen([sys.executable] + args, env=clean_env, start_new_session=True)
         except Exception as e:
-            self.log(f"Ошибка при подготовке перезапуска: {e}")
+            self.log(f"Критическая ошибка перезапуска: {e}")
             
         self.root.destroy()
         os._exit(0)
