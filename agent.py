@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 import json
 import os
 import yaml
@@ -9,7 +9,6 @@ import time
 import threading
 from datetime import datetime
 import sys
-import os
 from PIL import Image, ImageDraw
 import pystray
 
@@ -24,6 +23,12 @@ class ExtractorAgent:
         self.config = self.load_config()
         self.state = self.load_state()
         self.running = False
+        
+        # Ensure PIN exists in config
+        if 'security' not in self.config:
+            self.config['security'] = {'pin_code': '0000'}
+            self.save_config()
+            
         self.root = tk.Tk()
         self.root.title("Fortuna Dashboard - Firebird Extractor")
         self.root.geometry("500x600")
@@ -32,13 +37,18 @@ class ExtractorAgent:
         self.setup_ui()
         self.setup_tray()
         
-        # Override close button to minimize to tray
+        # Override close button to hide to tray
         self.root.protocol("WM_DELETE_WINDOW", self.hide_window)
         
         if autostart:
             self.log("Автозапуск: Запуск синхронизации в фоновом режиме")
             self.root.withdraw() # Start hidden
             self.toggle_sync()
+        else:
+            # If not autostart, we might want to show the window, 
+            # but usually it starts minimized from the startup script.
+            # If manually started, we show it.
+            pass
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -47,7 +57,8 @@ class ExtractorAgent:
         return {
             'db': {'path': '', 'user': 'SYSDBA', 'password': 'masterkey'},
             'railway': {'url': '', 'token': ''},
-            'sync': {'interval_seconds': 60, 'tables': []}
+            'sync': {'interval_seconds': 60, 'tables': [], 'batch_size': 1000},
+            'security': {'pin_code': '0000'}
         }
 
     def save_config(self):
@@ -65,11 +76,15 @@ class ExtractorAgent:
             json.dump(self.state, f)
 
     def check_single_instance(self):
-        # Very simple lock file check for Windows/macOS
         if os.path.exists(self.lock_file):
             try:
-                os.remove(self.lock_file) # Try to remove it
+                # Try to see if the process is actually running (Windows specific check could be complex)
+                # For now, we just try to delete it. If it fails, someone else has it open.
+                os.remove(self.lock_file)
             except:
+                # Can't remove, likely in use
+                root = tk.Tk()
+                root.withdraw()
                 messagebox.showerror("Ошибка", "Экстрактор уже запущен!")
                 sys.exit(1)
         
@@ -77,32 +92,46 @@ class ExtractorAgent:
             f.write(str(os.getpid()))
 
     def setup_tray(self):
-        # Create a simple icon image
-        width = 64
-        height = 64
-        color1 = "blue"
-        color2 = "white"
-        image = Image.new('RGB', (width, height), color1)
+        width, height = 64, 64
+        image = Image.new('RGB', (width, height), "blue")
         dc = ImageDraw.Draw(image)
-        dc.rectangle([width // 4, height // 4, width * 3 // 4, height * 3 // 4], fill=color2)
+        dc.rectangle([width // 4, height // 4, width * 3 // 4, height * 3 // 4], fill="white")
         
         menu = pystray.Menu(
-            pystray.MenuItem('Показать', self.show_window),
-            pystray.MenuItem('Выход', self.quit_app)
+            pystray.MenuItem('Показать настройки', self.show_window_secure),
+            pystray.MenuItem('Выход', self.quit_app_secure)
         )
         self.tray_icon = pystray.Icon("extractor_agent", image, "Firebird Extractor", menu)
-        
-        # Run tray icon in a separate thread
         thread = threading.Thread(target=self.tray_icon.run, daemon=True)
         thread.start()
+
+    def ask_pin(self, title="Проверка"):
+        pin = simpledialog.askstring(title, "Введите ПИН-код:", show='*', parent=self.root if self.root.winfo_viewable() else None)
+        if pin == self.config['security'].get('pin_code', '0000'):
+            return True
+        if pin is not None:
+            messagebox.showerror("Ошибка", "Неверный ПИН-код")
+        return False
 
     def hide_window(self):
         self.root.withdraw()
 
-    def show_window(self):
-        self.root.deiconify()
-        self.root.lift()
-        self.root.focus_force()
+    def show_window_secure(self):
+        # We need to use self.root.after because tray runs in a separate thread
+        self.root.after(0, self._internal_show_window)
+
+    def _internal_show_window(self):
+        if self.ask_pin("Доступ к настройкам"):
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+
+    def quit_app_secure(self):
+        self.root.after(0, self._internal_quit_app)
+
+    def _internal_quit_app(self):
+        if self.ask_pin("Завершение работы"):
+            self.quit_app()
 
     def quit_app(self):
         self.running = False
@@ -114,7 +143,18 @@ class ExtractorAgent:
         except:
             pass
         self.root.destroy()
-        os._exit(0) # Force exit to kill all threads
+        os._exit(0)
+
+    def restart_agent(self):
+        self.log("Выполняется перезапуск агента...")
+        try:
+            if self.tray_icon:
+                self.tray_icon.stop()
+            if os.path.exists(self.lock_file):
+                os.remove(self.lock_file)
+        except:
+            pass
+        os.execv(sys.executable, ['python'] + sys.argv)
 
     def setup_ui(self):
         # Database Settings
@@ -158,6 +198,13 @@ class ExtractorAgent:
         self.sync_batch_var = tk.StringVar(value=str(self.config['sync'].get('batch_size', 1000)))
         ttk.Entry(sync_frame, textvariable=self.sync_batch_var, width=10).grid(row=0, column=3, sticky="w", padx=5, pady=2)
 
+        # Security Settings
+        sec_frame = ttk.LabelFrame(self.root, text="Безопасность")
+        sec_frame.pack(fill="x", padx=10, pady=5)
+        ttk.Label(sec_frame, text="ПИН-код:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        self.pin_var = tk.StringVar(value=self.config['security'].get('pin_code', '0000'))
+        ttk.Entry(sec_frame, textvariable=self.pin_var, width=10).grid(row=0, column=1, sticky="w", padx=5, pady=2)
+
         # SQL Query Display (Read-only)
         query_frame = ttk.LabelFrame(self.root, text="Текущий SQL запрос (Биллинг)")
         query_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -194,7 +241,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         self.log_area = scrolledtext.ScrolledText(log_frame, state='disabled', height=10, font=("Consolas", 8))
         self.log_area.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Status Bar
         self.status_var = tk.StringVar(value="Статус: Остановлено")
         ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w").pack(fill="x", side="bottom")
 
@@ -217,6 +263,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         self.config['db']['password'] = self.db_pass_var.get()
         self.config['railway']['url'] = self.rw_url_var.get()
         self.config['railway']['token'] = self.rw_token_var.get()
+        self.config['security']['pin_code'] = self.pin_var.get()
         
         try:
             self.config['sync']['interval_seconds'] = int(self.sync_interval_var.get())
@@ -232,7 +279,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             if not self.config['db']['path'] or not self.config['railway']['url']:
                 messagebox.showwarning("Внимание", "Заполните настройки перед запуском")
                 return
-            
             self.running = True
             self.start_btn.config(text="ОСТАНОВИТЬ СИНХРОНИЗАЦИЮ")
             self.status_var.set("Статус: Работает")
@@ -245,6 +291,63 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             self.status_var.set("Статус: Остановлено")
             self.log("Синхронизация остановлена")
 
+    def sync_billing(self):
+        try:
+            conn = fdb.connect(dsn=self.config['db']['path'], user=self.config['db']['user'], password=self.config['db']['password'], charset='UTF8')
+            cur = conn.cursor()
+            batch_size = self.config['sync'].get('batch_size', 1000)
+            
+            while True:
+                last_id = self.state.get('JOINED_BILLING', 0)
+                query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID > ? ORDER BY u.UCHET_ID ASC ROWS 1 TO {batch_size}"
+                cur.execute(query, (last_id,))
+                columns = [column[0].upper() for column in cur.description]
+                raw_rows = cur.fetchall()
+                if not raw_rows: break
+                
+                processed_records = []
+                ru_months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+                for row in raw_rows:
+                    r = dict(zip(columns, row))
+                    sum_base = float(r['SUM_BASE'] or 0)
+                    sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
+                    dt_start = r['START_TIME']
+                    if isinstance(dt_start, str):
+                        try: dt_start = datetime.fromisoformat(dt_start.replace('Z', ''))
+                        except: dt_start = datetime.now()
+                    
+                    processed_records.append({
+                        'id': r['ID'],
+                        'tableId': str(r['TABLE_NUM']),
+                        'tableCategory': self.get_table_category(r['TABLE_NUM']),
+                        'startTime': r['START_TIME'].isoformat() if hasattr(r['START_TIME'], 'isoformat') else str(r['START_TIME']),
+                        'endTime': r['END_TIME'].isoformat() if r['END_TIME'] and hasattr(r['END_TIME'], 'isoformat') else str(r['END_TIME']),
+                        'month': f"{ru_months[dt_start.month-1]} {dt_start.year}",
+                        'weekNum': f"Неделя {dt_start.isocalendar()[1]} ({dt_start.year})",
+                        'dayOfWeek': dt_start.strftime('%a').upper(),
+                        'dateFormatted': dt_start.strftime('%Y-%m-%d'),
+                        'startHour': dt_start.hour,
+                        'durationMins': int(r['DURATION_MINS'] or 0),
+                        'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
+                        'client': r['CLIENT_NAME'] or 'Гость без карты',
+                        'sumWithDiscount': sum_with_discount,
+                        'sumBase': sum_base,
+                        'discountLost': round(sum_base - sum_with_discount, 2),
+                        'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
+                        'is_processed': True
+                    })
+                    last_id = max(last_id, r['ID'])
+
+                if self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_records}]):
+                    self.state['JOINED_BILLING'] = last_id
+                    self.save_state()
+                else: break # Stop batching if upload failed
+
+                if len(raw_rows) < batch_size: break
+            conn.close()
+        except Exception as e:
+            self.log(f"Ошибка синхронизации биллинга: {e}")
+
     def get_table_category(self, table_num):
         try:
             num = int(table_num)
@@ -252,105 +355,8 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             if 10 <= num <= 12: return 'Пул'
             if num in [13, 14]: return 'Теннис'
             if num == 16: return 'ВИП'
-        except:
-            pass
+        except: pass
         return 'Неизвестно'
-
-    def sync_billing(self):
-        try:
-            conn = fdb.connect(
-                dsn=self.config['db']['path'],
-                user=self.config['db']['user'],
-                password=self.config['db']['password'],
-                charset='UTF8'
-            )
-            cur = conn.cursor()
-            
-            total_processed = 0
-            batch_size = self.config['sync'].get('batch_size', 1000)
-            
-            while True:
-                last_id = self.state.get('JOINED_BILLING', 0)
-                
-                query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID > ? ORDER BY u.UCHET_ID ASC ROWS 1 TO {batch_size}"
-                
-                cur.execute(query, (last_id,))
-                columns = [column[0].upper() for column in cur.description]
-                raw_rows = cur.fetchall()
-                
-                if not raw_rows:
-                    break
-
-                processed_records = []
-                ru_months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-                
-                for row in raw_rows:
-                    r = dict(zip(columns, row))
-                    
-                    id_val = r['ID']
-                    start_time = r['START_TIME']
-                    end_time = r['END_TIME']
-                    sum_base = float(r['SUM_BASE'] or 0)
-                    sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
-                    
-                    dt_start = start_time
-                    if isinstance(dt_start, str):
-                        try:
-                            dt_start = datetime.fromisoformat(dt_start.replace('Z', ''))
-                        except:
-                            dt_start = datetime.now()
-
-                    month = f"{ru_months[dt_start.month-1]} {dt_start.year}"
-                    week_num = f"Неделя {dt_start.isocalendar()[1]} ({dt_start.year})"
-                    day_of_week = dt_start.strftime('%a').upper()
-                    date_formatted = dt_start.strftime('%Y-%m-%d')
-                    start_hour = dt_start.hour
-                    discount_lost = round(sum_base - sum_with_discount, 2)
-                    
-                    table_num = r['TABLE_NUM']
-                    table_category = self.get_table_category(table_num)
-
-                    processed_records.append({
-                        'id': id_val,
-                        'tableId': str(table_num),
-                        'tableCategory': table_category,
-                        'startTime': start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time),
-                        'endTime': end_time.isoformat() if end_time and hasattr(end_time, 'isoformat') else str(end_time),
-                        'month': month,
-                        'weekNum': week_num,
-                        'dayOfWeek': day_of_week,
-                        'dateFormatted': date_formatted,
-                        'startHour': start_hour,
-                        'durationMins': int(r['DURATION_MINS'] or 0),
-                        'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
-                        'client': r['CLIENT_NAME'] or 'Гость без карты',
-                        'sumWithDiscount': sum_with_discount,
-                        'sumBase': sum_base,
-                        'discountLost': discount_lost,
-                        'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
-                        'is_processed': True
-                    })
-                    
-                    last_id = max(last_id, id_val)
-
-                self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_records}])
-                self.state['JOINED_BILLING'] = last_id
-                self.save_state()
-                total_processed += len(processed_records)
-                
-                if len(raw_rows) < batch_size:
-                    break
-                
-                if total_processed >= (batch_size * 5):
-                    self.log(f"Биллинг: Промежуточный лимит {batch_size * 5} достигнут")
-                    break
-
-            if total_processed > 0:
-                self.log(f"Синхронизировано {total_processed} записей биллинга (Joined)")
-            
-            conn.close()
-        except Exception as e:
-            self.log(f"Ошибка синхронизации биллинга: {e}")
 
     def sync_loop(self):
         while self.running:
@@ -369,86 +375,63 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
     def perform_sync(self):
         try:
-            conn = fdb.connect(
-                dsn=self.config['db']['path'],
-                user=self.config['db']['user'],
-                password=self.config['db']['password'],
-                charset='UTF8'
-            )
+            conn = fdb.connect(dsn=self.config['db']['path'], user=self.config['db']['user'], password=self.config['db']['password'], charset='UTF8')
             cur = conn.cursor()
-            
             sync_data = []
             tables = self.config['sync'].get('tables', [])
             if not tables:
                 conn.close()
                 return
-
             batch_size = self.config['sync'].get('batch_size', 1000)
             for table in tables:
                 while True:
                     last_id = self.state.get(table, 0)
-                    if last_id == 'COMPLETED':
-                        break
-
+                    if last_id == 'COMPLETED': break
                     cur.execute(f"SELECT * FROM {table} WHERE 1=0")
                     columns = [column[0].upper() for column in cur.description]
                     id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
-                    if not id_col:
-                        id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
+                    if not id_col: id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
 
                     try:
-                        if id_col:
-                            cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
-                        else:
-                            cur.execute(f"SELECT * FROM {table}")
-                        
+                        if id_col: cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
+                        else: cur.execute(f"SELECT * FROM {table}")
                         raw_rows = cur.fetchall()
                         if not raw_rows:
                             if not id_col: self.state[table] = 'COMPLETED'
                             break
-                        
                         rows = [dict(zip(columns, row)) for row in raw_rows]
                         sync_data.append({'table': table, 'records': rows})
-                        
-                        if id_col:
-                            self.state[table] = max(r[id_col] for r in rows)
-                        else:
-                            self.state[table] = 'COMPLETED'
-                            break
-                        
-                        if len(raw_rows) < batch_size:
-                            break
+                        if id_col: self.state[table] = max(r[id_col] for r in rows)
+                        else: self.state[table] = 'COMPLETED'; break
+                        if len(raw_rows) < batch_size: break
                     except Exception as e:
                         self.log(f"Ошибка при чтении {table}: {e}")
                         break
-            
             conn.close()
             if sync_data:
-                self.upload_to_railway(sync_data)
-            self.save_state()
+                if self.upload_to_railway(sync_data): self.save_state()
         except Exception as e:
             self.log(f"Ошибка синхронизации таблиц: {e}")
 
     def upload_to_railway(self, data):
         url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/sync"
         headers = {'x-extractor-token': self.config['railway']['token'].strip()}
-        
         def json_serial(obj):
             from datetime import datetime, date, time
             from decimal import Decimal
-            if isinstance(obj, (datetime, date, time)):
-                return obj.isoformat()
-            if isinstance(obj, Decimal):
-                return float(obj)
-            raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+            if isinstance(obj, (datetime, date, time)): return obj.isoformat()
+            if isinstance(obj, Decimal): return float(obj)
+            raise TypeError(f"Type {obj.__class__.__name__} not serializable")
 
         try:
             json_payload = json.dumps({'data': data}, default=json_serial)
             resp = requests.post(url, data=json_payload, headers={**headers, 'Content-Type': 'application/json'}, timeout=30)
             resp.raise_for_status()
-            self.log(f"Выгрузка успешна: {len(data)} таблиц")
+            self.log(f"Выгрузка успешна: {len(data)} объектов")
+            return True
         except Exception as e:
             self.log(f"Ошибка выгрузки на Railway: {e}")
+            return False
 
     def check_commands(self):
         url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/command"
@@ -461,16 +444,23 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 self.log("Команда: Полная синхронизация. Сброс состояния...")
                 self.state = {}
                 self.save_state()
-        except:
-            pass
+            elif cmd.get('command') == 'change_interval':
+                new_interval = cmd.get('interval')
+                if new_interval:
+                    self.log(f"Команда: Смена интервала на {new_interval} сек.")
+                    self.config['sync']['interval_seconds'] = int(new_interval)
+                    self.save_config()
+                    self.root.after(0, lambda: self.sync_interval_var.set(str(new_interval)))
+            elif cmd.get('command') == 'restart':
+                self.log("Команда: Перезапуск агента...")
+                self.root.after(0, self.restart_agent)
+        except: pass
 
     def send_heartbeat(self):
         url = f"{self.config['railway']['url'].strip().rstrip('/')}/api/extractor/heartbeat"
         headers = {'x-extractor-token': self.config['railway']['token'].strip()}
-        try:
-            requests.post(url, json={'status': 'online', 'version': '1.0.0'}, headers=headers, timeout=5)
-        except:
-            pass
+        try: requests.post(url, json={'status': 'online', 'version': '1.1.0'}, headers=headers, timeout=5)
+        except: pass
 
 if __name__ == "__main__":
     autostart = "--autostart" in sys.argv
