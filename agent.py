@@ -147,9 +147,15 @@ class ExtractorAgent:
         os._exit(0)
 
     def restart_agent(self):
-        self.log("Подготовка к перезапуску (кодировка)...")
+        self.log("Критический перезапуск через 5 секунд...")
         self.running = False
         
+        # Aggressive environment scrubbing in the current process
+        # This prevents any child processes (including cmd.exe) from inheriting PyInstaller state.
+        mei_vars = [k for k in os.environ.keys() if k.startswith('_MEI') or k in ['PYTHONHOME', 'PYTHONPATH']]
+        for var in mei_vars:
+            os.environ.pop(var, None)
+            
         try:
             if self.tray_icon:
                 self.tray_icon.stop()
@@ -168,34 +174,27 @@ class ExtractorAgent:
             args.append("--autostart")
             
         try:
-            # Clean environment for the new process
-            new_env = os.environ.copy()
-            for key in list(new_env.keys()):
-                if key.startswith('_MEI') or key in ['PYTHONHOME', 'PYTHONPATH']:
-                    new_env.pop(key, None)
-
             if sys.platform == 'win32':
-                # Windows restart using a temporary batch file with CP1251 encoding
-                # to handle Cyrillic characters in the path correctly.
+                # Windows restart using a temporary batch file
                 exe = sys.executable
                 params = ' '.join(f'"{a}"' for a in args)
-                bat_path = os.path.join(os.environ['TEMP'], f'restart_{os.getpid()}.bat')
+                bat_path = os.path.join(os.environ.get('TEMP', '.'), f'restart_{os.getpid()}.bat')
                 
-                # Write with CP1251 (standard for Russian Windows CMD)
+                # Start /i ignores the current environment and uses a fresh one.
+                # This is the most robust way to restart a PyInstaller EXE.
                 with open(bat_path, 'w', encoding='cp1251', errors='replace') as f:
                     f.write(f'@echo off\n')
-                    f.write(f'chcp 1251 > nul\n') # Set code page to match file encoding
-                    f.write(f'timeout /t 3 /nobreak > nul\n')
-                    f.write(f'start "" "{exe}" {params}\n')
+                    f.write(f'chcp 1251 > nul\n')
+                    f.write(f'timeout /t 5 /nobreak > nul\n')
+                    f.write(f'start /i "" "{exe}" {params}\n')
                     f.write(f'del "%~f0"\n')
                 
                 # Launch batch file hidden
                 subprocess.Popen(['cmd.exe', '/c', bat_path], 
-                                 env=new_env,
                                  creationflags=0x08000000) # CREATE_NO_WINDOW
             else:
                 # Unix restart
-                subprocess.Popen([sys.executable] + args, env=new_env, start_new_session=True)
+                subprocess.Popen([sys.executable] + args, start_new_session=True)
         except Exception as e:
             self.log(f"Ошибка при подготовке перезапуска: {e}")
             
