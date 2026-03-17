@@ -162,19 +162,35 @@ class ExtractorAgent:
         if "--autostart" not in args:
             args.append("--autostart")
             
-        # Use detached process flags on Windows to avoid handle inheritance
-        # and allow the old process's temp dir to be cleaned up.
-        popen_kwargs = {'close_fds': True}
-        if sys.platform == 'win32':
-            # 0x00000008 = DETACHED_PROCESS
-            popen_kwargs['creationflags'] = 0x00000008
+        # Aggressive decoupling to avoid PyInstaller temp dir locking
+        try:
+            devnull = getattr(subprocess, 'DEVNULL', None) or open(os.devnull, 'wb')
+            popen_kwargs = {
+                'close_fds': True,
+                'stdin': devnull,
+                'stdout': devnull,
+                'stderr': devnull,
+            }
             
-        if getattr(sys, 'frozen', False):
-            # Running as PyInstaller EXE
-            subprocess.Popen([sys.executable] + args[1:], **popen_kwargs)
-        else:
-            # Running as Python script
-            subprocess.Popen([sys.executable] + args, **popen_kwargs)
+            if sys.platform == 'win32':
+                # Use 'start' command to completely detach the process
+                # and CREATE_NO_WINDOW (0x08000000)
+                popen_kwargs['creationflags'] = 0x08000000
+                if getattr(sys, 'frozen', False):
+                    # Join args properly for shell execution
+                    cmd_line = f'start /b "" "{sys.executable}" ' + ' '.join(f'"{a}"' for a in args[1:])
+                    subprocess.Popen(cmd_line, shell=True, **popen_kwargs)
+                else:
+                    cmd_line = f'start /b "" "{sys.executable}" ' + ' '.join(f'"{a}"' for a in args)
+                    subprocess.Popen(cmd_line, shell=True, **popen_kwargs)
+            else:
+                # Unix-like restart
+                if getattr(sys, 'frozen', False):
+                    subprocess.Popen([sys.executable] + args[1:], start_new_session=True, **popen_kwargs)
+                else:
+                    subprocess.Popen([sys.executable] + args, start_new_session=True, **popen_kwargs)
+        except Exception as e:
+            self.log(f"Ошибка при попытке перезапуска: {e}")
             
         self.root.destroy()
         os._exit(0)
