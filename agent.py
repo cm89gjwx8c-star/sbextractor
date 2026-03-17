@@ -168,30 +168,21 @@ class ExtractorAgent:
             args.append("--autostart")
             
         try:
-            # VERY AGGRESSIVE ENV CLEANING
-            # We must remove everything related to the current PyInstaller instance
+            # Clean environment for the new process
             new_env = os.environ.copy()
-            mei_path = getattr(sys, '_MEIPASS', '')
-            
-            # Remove any keys that look like PyInstaller variables
+            # Remove ALL PyInstaller related variables
             for key in list(new_env.keys()):
-                if 'MEI' in key.upper():
+                if key.startswith('_MEI') or key in ['PYTHONHOME', 'PYTHONPATH']:
                     del new_env[key]
-            
-            # Clean PATH of any references to the current temp dir
-            if mei_path and 'PATH' in new_env:
-                paths = new_env['PATH'].split(os.pathsep)
-                new_env['PATH'] = os.pathsep.join([p for p in paths if mei_path not in p])
 
             if sys.platform == 'win32':
-                # Detailed Windows detached restart
+                # Windows restart with delay to allow cleanup
                 exe = sys.executable
                 params = ' '.join(f'"{a}"' for a in args)
-                # We use cmd /c with local 'set' to be extra sure
-                full_cmd = f'cmd /c "set _MEIPASS= && ping 127.0.0.1 -n 3 > nul && start "" "{exe}" {params}"'
-                
-                # Use CREATE_NO_WINDOW (0x08000000) and DETACHED_PROCESS (0x00000008)
-                subprocess.Popen(full_cmd, shell=False, env=new_env, creationflags=0x08000008 | 0x08000000)
+                # Use shell=True to handle word splitting and binary search
+                # ping provides the delay, start launches the new process detached
+                full_cmd = f'ping 127.0.0.1 -n 3 > nul && start "" "{exe}" {params}'
+                subprocess.Popen(full_cmd, shell=True, env=new_env, creationflags=0x08000000)
             else:
                 # Unix restart
                 subprocess.Popen([sys.executable] + args, env=new_env, start_new_session=True)
