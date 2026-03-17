@@ -147,8 +147,8 @@ class ExtractorAgent:
         os._exit(0)
 
     def restart_agent(self):
-        self.log("Выполняется перезапуск агента...")
-        self.running = False # Stop the sync loop
+        self.log("Выполняется перезапуск агента через 2 секунды...")
+        self.running = False # Stop sync loop
         try:
             if self.tray_icon:
                 self.tray_icon.stop()
@@ -157,40 +157,36 @@ class ExtractorAgent:
         except:
             pass
         
-        # Prepare arguments, ensuring --autostart is included
-        args = sys.argv[:]
+        # Prepare arguments
+        if getattr(sys, 'frozen', False):
+            # For EXE: sys.argv[0] is the EXE itself
+            args = sys.argv[1:]
+        else:
+            # For script: we want to keep all args including script name
+            args = sys.argv[:]
+            
         if "--autostart" not in args:
             args.append("--autostart")
             
-        # Aggressive decoupling to avoid PyInstaller temp dir locking
         try:
-            devnull = getattr(subprocess, 'DEVNULL', None) or open(os.devnull, 'wb')
-            popen_kwargs = {
-                'close_fds': True,
-                'stdin': devnull,
-                'stdout': devnull,
-                'stderr': devnull,
-            }
-            
             if sys.platform == 'win32':
-                # Use 'start' command to completely detach the process
-                # and CREATE_NO_WINDOW (0x08000000)
-                popen_kwargs['creationflags'] = 0x08000000
-                if getattr(sys, 'frozen', False):
-                    # Join args properly for shell execution
-                    cmd_line = f'start /b "" "{sys.executable}" ' + ' '.join(f'"{a}"' for a in args[1:])
-                    subprocess.Popen(cmd_line, shell=True, **popen_kwargs)
-                else:
-                    cmd_line = f'start /b "" "{sys.executable}" ' + ' '.join(f'"{a}"' for a in args)
-                    subprocess.Popen(cmd_line, shell=True, **popen_kwargs)
+                # DELAYED RESTART: Use ping to wait 2-3 seconds, then start the exe.
+                # This gives the current process enough time to exit and clean up its TEMP folder.
+                exe = sys.executable
+                params = ' '.join(f'"{a}"' for a in args)
+                # cmd /c "ping 127.0.0.1 -n 3 > nul && start "" "exe" params"
+                full_cmd = f'ping 127.0.0.1 -n 3 > nul && start "" "{exe}" {params}'
+                
+                # Using CREATE_NO_WINDOW (0x08000000) to keep it silent
+                subprocess.Popen(full_cmd, shell=True, creationflags=0x08000000)
             else:
-                # Unix-like restart
+                # Unix-like restart (usually doesn't have the temp dir lock issue)
                 if getattr(sys, 'frozen', False):
-                    subprocess.Popen([sys.executable] + args[1:], start_new_session=True, **popen_kwargs)
+                    subprocess.Popen([sys.executable] + args, start_new_session=True)
                 else:
-                    subprocess.Popen([sys.executable] + args, start_new_session=True, **popen_kwargs)
+                    subprocess.Popen([sys.executable] + args, start_new_session=True)
         except Exception as e:
-            self.log(f"Ошибка при попытке перезапуска: {e}")
+            self.log(f"Ошибка при подготовке перезапуска: {e}")
             
         self.root.destroy()
         os._exit(0)
