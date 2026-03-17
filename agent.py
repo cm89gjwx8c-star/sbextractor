@@ -147,8 +147,8 @@ class ExtractorAgent:
         os._exit(0)
 
     def restart_agent(self):
-        self.log("Выполняется перезапуск агента через 2 секунды...")
-        self.running = False # Stop sync loop
+        self.log("Выполняется перезапуск агента...")
+        self.running = False
         
         try:
             if self.tray_icon:
@@ -158,8 +158,9 @@ class ExtractorAgent:
         except:
             pass
         
-        # Determine arguments
+        # Prepare arguments
         if getattr(sys, 'frozen', False):
+            # sys.executable is the Path to the EXE
             args = sys.argv[1:]
         else:
             args = sys.argv[:]
@@ -168,26 +169,26 @@ class ExtractorAgent:
             args.append("--autostart")
             
         try:
-            # Clean environment for the new process
+            # Clean environment for the new process to avoid DLL errors
             new_env = os.environ.copy()
             # Remove ALL PyInstaller related variables
             for key in list(new_env.keys()):
                 if key.startswith('_MEI') or key in ['PYTHONHOME', 'PYTHONPATH']:
-                    del new_env[key]
+                    new_env.pop(key, None)
 
             if sys.platform == 'win32':
-                # Windows restart with delay to allow cleanup
-                exe = sys.executable
-                params = ' '.join(f'"{a}"' for a in args)
-                # Use shell=True to handle word splitting and binary search
-                # ping provides the delay, start launches the new process detached
-                full_cmd = f'ping 127.0.0.1 -n 3 > nul && start "" "{exe}" {params}'
-                subprocess.Popen(full_cmd, shell=True, env=new_env, creationflags=0x08000000)
+                # Flags for detached process on Windows
+                # DETACHED_PROCESS(0x8) | CREATE_NEW_PROCESS_GROUP(0x200) | CREATE_NO_WINDOW(0x08000000)
+                flags = 0x00000008 | 0x00000200 | 0x08000000
+                subprocess.Popen([sys.executable] + args, 
+                                 env=new_env, 
+                                 close_fds=True, 
+                                 creationflags=flags)
             else:
                 # Unix restart
                 subprocess.Popen([sys.executable] + args, env=new_env, start_new_session=True)
         except Exception as e:
-            self.log(f"Ошибка при подготовке перезапуска: {e}")
+            self.log(f"Ошибка при перезапуске: {e}")
             
         self.root.destroy()
         os._exit(0)
