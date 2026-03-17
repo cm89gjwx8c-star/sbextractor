@@ -147,15 +147,9 @@ class ExtractorAgent:
         os._exit(0)
 
     def restart_agent(self):
-        self.log("Критический перезапуск через 5 секунд...")
+        self.log("Безопасный перезапуск (Powershell) через 5 секунд...")
         self.running = False
         
-        # Aggressive environment scrubbing in the current process
-        # This prevents any child processes (including cmd.exe) from inheriting PyInstaller state.
-        mei_vars = [k for k in os.environ.keys() if k.startswith('_MEI') or k in ['PYTHONHOME', 'PYTHONPATH']]
-        for var in mei_vars:
-            os.environ.pop(var, None)
-            
         try:
             if self.tray_icon:
                 self.tray_icon.stop()
@@ -175,26 +169,29 @@ class ExtractorAgent:
             
         try:
             if sys.platform == 'win32':
-                # Windows restart using a temporary batch file
+                # Use Powershell for better encoding (Cyrillic paths) and isolation.
                 exe = sys.executable
-                params = ' '.join(f'"{a}"' for a in args)
-                bat_path = os.path.join(os.environ.get('TEMP', '.'), f'restart_{os.getpid()}.bat')
+                # Join arguments for Powershell Start-Process
+                params_str = ' '.join([f'"{a}"' for a in args])
                 
-                # Start /i ignores the current environment and uses a fresh one.
-                # This is the most robust way to restart a PyInstaller EXE.
-                with open(bat_path, 'w', encoding='cp1251', errors='replace') as f:
-                    f.write(f'@echo off\n')
-                    f.write(f'chcp 1251 > nul\n')
-                    f.write(f'timeout /t 5 /nobreak > nul\n')
-                    f.write(f'start /i "" "{exe}" {params}\n')
-                    f.write(f'del "%~f0"\n')
+                # Powershell command: wait, clear env, start process
+                ps_command = (
+                    f"Start-Sleep -s 5; "
+                    f"$env:_MEIPASS=''; $env:PYTHONHOME=''; $env:PYTHONPATH=''; "
+                    f"Start-Process -FilePath '{exe}' -ArgumentList '{params_str}'"
+                )
                 
-                # Launch batch file hidden
-                subprocess.Popen(['cmd.exe', '/c', bat_path], 
-                                 creationflags=0x08000000) # CREATE_NO_WINDOW
+                # Launch Powershell hidden
+                subprocess.Popen(
+                    ['powershell', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', ps_command],
+                    creationflags=0x08000000 # CREATE_NO_WINDOW
+                )
             else:
                 # Unix restart
-                subprocess.Popen([sys.executable] + args, start_new_session=True)
+                new_env = os.environ.copy()
+                for key in ['_MEIPASS', 'PYTHONHOME', 'PYTHONPATH']:
+                    new_env.pop(key, None)
+                subprocess.Popen([sys.executable] + args, env=new_env, start_new_session=True)
         except Exception as e:
             self.log(f"Ошибка при подготовке перезапуска: {e}")
             
