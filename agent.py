@@ -147,7 +147,7 @@ class ExtractorAgent:
         os._exit(0)
 
     def restart_agent(self):
-        self.log("Подготовка к перезапуску...")
+        self.log("Подготовка к перезапуску (кодировка)...")
         self.running = False
         
         try:
@@ -175,13 +175,16 @@ class ExtractorAgent:
                     new_env.pop(key, None)
 
             if sys.platform == 'win32':
-                # Windows restart using a temporary batch file for clean cleanup
+                # Windows restart using a temporary batch file with CP1251 encoding
+                # to handle Cyrillic characters in the path correctly.
                 exe = sys.executable
                 params = ' '.join(f'"{a}"' for a in args)
                 bat_path = os.path.join(os.environ['TEMP'], f'restart_{os.getpid()}.bat')
                 
-                with open(bat_path, 'w') as f:
+                # Write with CP1251 (standard for Russian Windows CMD)
+                with open(bat_path, 'w', encoding='cp1251', errors='replace') as f:
                     f.write(f'@echo off\n')
+                    f.write(f'chcp 1251 > nul\n') # Set code page to match file encoding
                     f.write(f'timeout /t 3 /nobreak > nul\n')
                     f.write(f'start "" "{exe}" {params}\n')
                     f.write(f'del "%~f0"\n')
