@@ -7,6 +7,7 @@ $REPO_USER = "cm89gjwx8c-star"
 $REPO_NAME = "sbextractor"
 $INSTALL_DIR = "$env:LOCALAPPDATA\sbextractor"
 $ZIP_URL = "https://github.com/$REPO_USER/$REPO_NAME/raw/main/release.zip"
+$ZIP_URL = "https://raw.githubusercontent.com/$REPO_USER/$REPO_NAME/main/release.zip"
 
 Write-Host "--- Firebird Extractor Installer ---" -ForegroundColor Cyan
 
@@ -21,7 +22,7 @@ Write-Host "Downloading latest release from GitHub..." -ForegroundColor Yellow
 $zipPath = Join-Path $env:TEMP "sbextractor_release.zip"
 # Add cache buster to URL
 $cacheBuster = Get-Date -Format "yyyyMMddHHmmss"
-$finalUrl = "$ZIP_URL?v=$cacheBuster"
+$finalUrl = $ZIP_URL + "?v=" + $cacheBuster
 Invoke-WebRequest -Uri $finalUrl -OutFile $zipPath
 
 # 3. Extract
