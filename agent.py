@@ -30,25 +30,31 @@ class ExtractorAgent:
             self.config['security'] = {'pin_code': '0000'}
             self.save_config()
             
-        # Load Firebird Client Library if specified or available locally
-        client_lib = self.config['db'].get('client_path')
-        if not client_lib and os.path.exists('fbclient.dll'):
-            client_lib = os.path.abspath('fbclient.dll')
-            
-        if client_lib:
-            try:
-                os.environ['FDB_CLIENT_LIBRARY'] = client_lib
-                fdb.load_api(client_lib)
-                print(f"Загружена библиотека Firebird Client: {client_lib}")
-            except Exception as e:
-                print(f"Предупреждение: Не удалось загрузить клиентскую библиотеку {client_lib}: {e}")
-
         self.root = tk.Tk()
         self.root.title("Fortuna Dashboard - Firebird Extractor")
         self.root.geometry("500x600")
 
         self.tray_icon = None
         self.setup_ui()
+        
+        # Now we can log to UI
+        import platform
+        self.log(f"Программа запущена (Архитектура: {platform.architecture()[0]})")
+
+        # Load Firebird Client Library
+        client_lib = self.config['db'].get('client_path')
+        if not client_lib and os.path.exists('fbclient.dll'):
+            client_lib = os.path.abspath('fbclient.dll')
+            
+        if client_lib:
+            client_lib = os.path.normpath(client_lib)
+            try:
+                os.environ['FDB_CLIENT_LIBRARY'] = client_lib
+                fdb.load_api(client_lib)
+                self.log(f"Библиотека Firebird загружена: {client_lib}")
+            except Exception as e:
+                self.log(f"Ошибка загрузки библиотеки {client_lib}: {e}")
+                
         self.setup_tray()
         
         # Override close button to hide to tray
