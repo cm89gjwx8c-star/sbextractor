@@ -39,9 +39,14 @@ class ExtractorAgent:
         if client_lib:
             try:
                 fdb.load_api(client_lib)
-                self.log(f"Загружена библиотека Firebird Client: {client_lib}")
+                # self.log is not ready yet because root/ui not initialized, but printing is ok
+                print(f"Загружена библиотека Firebird Client: {client_lib}")
             except Exception as e:
-                self.log(f"Предупреждение: Не удалось загрузить клиентскую библиотеку {client_lib}: {e}")
+                print(f"Предупреждение: Не удалось загрузить клиентскую библиотеку {client_lib}: {e}")
+
+        self.root = tk.Tk()
+        self.root.title("Fortuna Dashboard - Firebird Extractor")
+        self.root.geometry("500x600")
 
         self.tray_icon = None
         self.setup_ui()
