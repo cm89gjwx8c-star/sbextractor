@@ -412,6 +412,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             if 1 <= num <= 9: return 'Русский'
             if 10 <= num <= 12: return 'Пул'
             if num in [13, 14]: return 'Теннис'
+            if num == 15: return 'Дартс'
             if num == 16: return 'ВИП'
         except: pass
         return 'Неизвестно'
