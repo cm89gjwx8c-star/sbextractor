@@ -19,10 +19,29 @@ if (!(Test-Path $INSTALL_DIR)) {
 # 2. Download Release
 Write-Host "Downloading latest release from GitHub..." -ForegroundColor Yellow
 $zipPath = Join-Path $env:TEMP "sbextractor_release.zip"
-Invoke-WebRequest -Uri $ZIP_URL -OutFile $zipPath
+# Add cache buster to URL
+$cacheBuster = Get-Date -Format "yyyyMMddHHmmss"
+$finalUrl = "$ZIP_URL?v=$cacheBuster"
+Invoke-WebRequest -Uri $finalUrl -OutFile $zipPath
 
 # 3. Extract
-Write-Host "Extracting files..." -ForegroundColor Yellow
+Write-Host "Cleaning old installation and extracting files..." -ForegroundColor Yellow
+if (Test-Path $INSTALL_DIR) {
+    # Delete old files but keep config if possible? 
+    # For a CLEAN fix, let's just backup the config and wipe the rest
+    $configPath = Join-Path $INSTALL_DIR "config.yaml"
+    $tempConfig = Join-Path $env:TEMP "sbextractor_config_backup.yaml"
+    if (Test-Path $configPath) { Copy-Item $configPath $tempConfig -Force }
+    
+    Remove-Item (Join-Path $INSTALL_DIR "*") -Recurse -Force -ErrorAction SilentlyContinue
+    
+    if (Test-Path $tempConfig) { 
+        Move-Item $tempConfig $configPath -Force 
+    }
+} else {
+    New-Item -ItemType Directory -Path $INSTALL_DIR | Out-Null
+}
+
 if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
     Expand-Archive -Path $zipPath -DestinationPath $INSTALL_DIR -Force
 } else {
