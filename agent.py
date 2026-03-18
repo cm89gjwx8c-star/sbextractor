@@ -395,6 +395,34 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             cur = conn.cursor()
             batch_size = self.config['sync'].get('batch_size', 1000)
             
+            # Maintain list of active (open) sessions to re-sync them when they close
+            active_ids = self.state.get('JOINED_BILLING_ACTIVE', [])
+            
+            # 1. Re-sync active sessions
+            if active_ids:
+                id_list = ','.join(map(str, active_ids))
+                query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID IN ({id_list})"
+                cur.execute(query)
+                columns = [column[0].upper() for column in cur.description]
+                active_rows = cur.fetchall()
+                if active_rows:
+                    processed_active = self._process_billing_rows(active_rows, columns)
+                    if self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_active}]):
+                        # Remove closed sessions from active list
+                        new_active_ids = []
+                        for r in processed_active:
+                            is_still_open = not r.get('endTime') or r['endTime'] == 'None'
+                            if is_still_open:
+                                new_active_ids.append(r['id'])
+                        
+                        # Also keep IDs that were in active_ids but not returned in this query (e.g. deleted or unexpected)
+                        # but normally they should all be returned. 
+                        # We only replace if we successfully got some rows.
+                        self.state['JOINED_BILLING_ACTIVE'] = new_active_ids
+                        active_ids = new_active_ids # Update local ref for next part
+                        self.save_state()
+
+            # 2. Sync new records
             while True:
                 last_id = self.state.get('JOINED_BILLING', 0)
                 query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID > ? ORDER BY u.UCHET_ID ASC ROWS 1 TO {batch_size}"
@@ -403,41 +431,16 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 raw_rows = cur.fetchall()
                 if not raw_rows: break
                 
-                processed_records = []
-                ru_months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
-                for row in raw_rows:
-                    r = dict(zip(columns, row))
-                    sum_base = float(r['SUM_BASE'] or 0)
-                    sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
-                    dt_start = r['START_TIME']
-                    if isinstance(dt_start, str):
-                        try: dt_start = datetime.fromisoformat(dt_start.replace('Z', ''))
-                        except: dt_start = datetime.now()
+                processed_new = self._process_billing_rows(raw_rows, columns)
+                if self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_new}]):
+                    for r in processed_new:
+                        last_id = max(last_id, r['id'])
+                        is_open = not r.get('endTime') or r['endTime'] == 'None'
+                        if is_open and r['id'] not in active_ids:
+                            active_ids.append(r['id'])
                     
-                    processed_records.append({
-                        'id': r['ID'],
-                        'tableId': str(r['TABLE_NUM']),
-                        'tableCategory': self.get_table_category(r['TABLE_NUM']),
-                        'startTime': r['START_TIME'].isoformat() if hasattr(r['START_TIME'], 'isoformat') else str(r['START_TIME']),
-                        'endTime': r['END_TIME'].isoformat() if r['END_TIME'] and hasattr(r['END_TIME'], 'isoformat') else str(r['END_TIME']),
-                        'month': f"{ru_months[dt_start.month-1]} {dt_start.year}",
-                        'weekNum': f"Неделя {dt_start.isocalendar()[1]} ({dt_start.year})",
-                        'dayOfWeek': dt_start.strftime('%a').upper(),
-                        'dateFormatted': dt_start.strftime('%Y-%m-%d'),
-                        'startHour': dt_start.hour,
-                        'durationMins': int(r['DURATION_MINS'] or 0),
-                        'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
-                        'client': r['CLIENT_NAME'] or 'Гость без карты',
-                        'sumWithDiscount': sum_with_discount,
-                        'sumBase': sum_base,
-                        'discountLost': round(sum_base - sum_with_discount, 2),
-                        'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
-                        'is_processed': True
-                    })
-                    last_id = max(last_id, r['ID'])
-
-                if self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_records}]):
                     self.state['JOINED_BILLING'] = last_id
+                    self.state['JOINED_BILLING_ACTIVE'] = active_ids
                     self.save_state()
                 else: break # Stop batching if upload failed
 
@@ -445,6 +448,41 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             conn.close()
         except Exception as e:
             self.log(f"Ошибка синхронизации биллинга: {e}")
+
+    def _process_billing_rows(self, raw_rows, columns):
+        processed_records = []
+        ru_months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+        for row in raw_rows:
+            r = dict(zip(columns, row))
+            sum_base = float(r['SUM_BASE'] or 0)
+            sum_with_discount = float(r['SUM_WITH_DISCOUNT'] or 0)
+            dt_start = r['START_TIME']
+            if isinstance(dt_start, str):
+                try: dt_start = datetime.fromisoformat(dt_start.replace('Z', ''))
+                except: dt_start = datetime.now()
+            
+            processed_records.append({
+                'id': r['ID'],
+                'tableId': str(r['TABLE_NUM']),
+                'tableCategory': self.get_table_category(r['TABLE_NUM']),
+                'startTime': r['START_TIME'].isoformat() if hasattr(r['START_TIME'], 'isoformat') else str(r['START_TIME']),
+                'endTime': r['END_TIME'].isoformat() if r['END_TIME'] and hasattr(r['END_TIME'], 'isoformat') else str(r['END_TIME']),
+                'month': f"{ru_months[dt_start.month-1]} {dt_start.year}",
+                'weekNum': f"Неделя {dt_start.isocalendar()[1]} ({dt_start.year})",
+                'dayOfWeek': dt_start.strftime('%a').upper(),
+                'dateFormatted': dt_start.strftime('%Y-%m-%d'),
+                'startHour': dt_start.hour,
+                'durationMins': int(r['DURATION_MINS'] or 0),
+                'discountPercent': float(r['DISCOUNT_PERCENT'] or 0),
+                'client': r['CLIENT_NAME'] or 'Гость без карты',
+                'sumWithDiscount': sum_with_discount,
+                'sumBase': sum_base,
+                'discountLost': round(sum_base - sum_with_discount, 2),
+                'tariffApplied': float(r['TARIFF_APPLIED'] or 0),
+                'is_processed': True
+            })
+        return processed_records
+
 
     def get_table_category(self, table_num):
         try:
