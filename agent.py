@@ -47,7 +47,7 @@ class ExtractorAgent:
             client_lib = os.path.abspath('fbclient.dll')
             
         if client_lib:
-            client_lib = os.path.normpath(client_lib)
+            client_lib = self.get_short_path(os.path.normpath(client_lib))
             try:
                 os.environ['FDB_CLIENT_LIBRARY'] = client_lib
                 fdb.load_api(client_lib)
@@ -195,37 +195,17 @@ class ExtractorAgent:
                     clean_env[k] = os.environ[k]
 
             if sys.platform == 'win32':
-                import ctypes
                 # Use Short Path (8.3) to bypass any encoding/Cyrillic issues in the path
-                def get_short_path(long_path):
-                    try:
-                        buf = ctypes.create_unicode_buffer(1024)
-                        ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 1024)
-                        return buf.value
-                    except:
-                        return long_path
-
-                exe_short = get_short_path(sys.executable)
-                params = ' '.join(f'"{a}"' for a in args)
-                bat_path = os.path.join(os.environ.get('TEMP', '.'), f'restart_fix.bat')
+                exe_short = self.get_short_path(sys.executable)
+                script_path = self.get_short_path(sys.argv[0]) if not getattr(sys, 'frozen', False) else ""
                 
-                # Write batch file using standard CP1251
-                with open(bat_path, 'w', encoding='cp1251', errors='replace') as f:
-                    f.write(f'@echo off\n')
-                    f.write(f'timeout /t 10 /nobreak > nul\n')
-                    # Force clear vars in the shell as well
-                    f.write(f'set _MEIPASS=\n')
-                    f.write(f'set PYTHONHOME=\n')
-                    f.write(f'set PYTHONPATH=\n')
-                    f.write(f'start /i "" "{exe_short}" {params}\n')
-                    f.write(f'del "%~f0"\n')
+                if getattr(sys, 'frozen', False):
+                    command = f'Start-Sleep -Seconds 10; Start-Process -FilePath "{exe_short}" -ArgumentList "--autostart"'
+                else:
+                    command = f'Start-Sleep -Seconds 10; Start-Process -FilePath "{exe_short}" -ArgumentList "\"{script_path}\" --autostart"'
                 
-                # Launch batch file absolutely detached
-                subprocess.Popen(['cmd.exe', '/c', bat_path], 
-                                 env=clean_env,
-                                 creationflags=0x08000000 | 0x00000008) # NO_WINDOW | DETACHED
+                subprocess.Popen(["powershell", "-Command", command], env=clean_env, start_new_session=True)
             else:
-                # Unix restart
                 subprocess.Popen([sys.executable] + args, env=clean_env, start_new_session=True)
         except Exception as e:
             self.log(f"Критическая ошибка перезапуска: {e}")
@@ -344,6 +324,17 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         if filename:
             self.db_client_var.set(filename)
 
+    def get_short_path(self, long_path):
+        if sys.platform != 'win32' or not long_path:
+            return long_path
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(512)
+            ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 512)
+            return buf.value if buf.value else long_path
+        except:
+            return long_path
+
     def save_settings(self):
         new_client_path = self.db_client_var.get()
         old_client_path = self.config['db'].get('client_path', '')
@@ -399,7 +390,8 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
     def sync_billing(self):
         try:
-            conn = fdb.connect(dsn=self.config['db']['path'], user=self.config['db']['user'], password=self.config['db']['password'], charset='UTF8')
+            db_path = self.get_short_path(self.config['db']['path'])
+            conn = fdb.connect(dsn=db_path, user=self.config['db']['user'], password=self.config['db']['password'], charset='UTF8')
             cur = conn.cursor()
             batch_size = self.config['sync'].get('batch_size', 1000)
             
