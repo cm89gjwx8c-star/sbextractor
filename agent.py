@@ -474,7 +474,8 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
 
     def perform_sync(self):
         try:
-            conn = fdb.connect(dsn=self.config['db']['path'], user=self.config['db']['user'], password=self.config['db']['password'], charset='UTF8')
+            db_path = self.get_short_path(self.config['db']['path'])
+            conn = fdb.connect(dsn=db_path, user=self.config['db']['user'], password=self.config['db']['password'], charset='UTF8')
             cur = conn.cursor()
             sync_data = []
             tables = self.config['sync'].get('tables', [])
