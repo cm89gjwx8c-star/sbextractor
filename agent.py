@@ -33,13 +33,12 @@ class ExtractorAgent:
         # Load Firebird Client Library if specified or available locally
         client_lib = self.config['db'].get('client_path')
         if not client_lib and os.path.exists('fbclient.dll'):
-            # Only use local DLL if it's there
             client_lib = os.path.abspath('fbclient.dll')
             
         if client_lib:
             try:
+                os.environ['FDB_CLIENT_LIBRARY'] = client_lib
                 fdb.load_api(client_lib)
-                # self.log is not ready yet because root/ui not initialized, but printing is ok
                 print(f"Загружена библиотека Firebird Client: {client_lib}")
             except Exception as e:
                 print(f"Предупреждение: Не удалось загрузить клиентскую библиотеку {client_lib}: {e}")
@@ -340,11 +339,14 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             self.db_client_var.set(filename)
 
     def save_settings(self):
+        new_client_path = self.db_client_var.get()
+        old_client_path = self.config['db'].get('client_path', '')
+
         self.config['db'] = {
             'path': self.db_path_var.get(),
             'user': self.db_user_var.get(),
             'password': self.db_pass_var.get(),
-            'client_path': self.db_client_var.get()
+            'client_path': new_client_path
         }
         self.config['railway']['url'] = self.rw_url_var.get()
         self.config['railway']['token'] = self.rw_token_var.get()
@@ -357,6 +359,19 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             self.log("Ошибка: интервал и размер пакета должны быть числами")
         
         self.save_config()
+
+        # If client path changed, try to load it immediately
+        if new_client_path and (new_client_path != old_client_path):
+            try:
+                os.environ['FDB_CLIENT_LIBRARY'] = new_client_path
+                fdb.load_api(new_client_path)
+                messagebox.showinfo("Успех", f"Библиотека Firebird загружена: {new_client_path}")
+                self.log(f"Перезагружена библиотека Firebird Client: {new_client_path}")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось загрузить DLL: {e}")
+                self.log(f"Ошибка загрузки DLL {new_client_path}: {e}")
+        else:
+            messagebox.showinfo("Успех", "Настройки сохранены")
 
     def toggle_sync(self):
         if not self.running:
