@@ -40,9 +40,19 @@ $configPath = Join-Path $INSTALL_DIR "config.yaml"
 if (Test-Path $configPath) {
     # Fix potential key mismatch from previous failed install
     $content = Get-Content $configPath -Raw
+    $changed = $false
     if ($content -match "database:") {
-        Write-Host "Fixing configuration key mismatch in existing config..." -ForegroundColor Yellow
+        Write-Host "Fixing configuration key mismatch (database -> db)..." -ForegroundColor Yellow
         $content = $content -replace "database:", "db:"
+        $changed = $true
+    }
+    if ($content -match "railway:" -and !($content -match "token:")) {
+        Write-Host "Adding missing 'token' key to railway section..." -ForegroundColor Yellow
+        # Simple string replace for the default structure
+        $content = $content -replace "url: '(.*)'", "url: '$1'`n  token: ''"
+        $changed = $true
+    }
+    if ($changed) {
         Set-Content -Path $configPath -Value $content
     }
 } else {
@@ -55,6 +65,7 @@ db:
   password: 'masterkey'
 railway:
   url: 'https://vash-proekt.railway.app'
+  token: ''
 sync:
   interval_seconds: 60
 security:
