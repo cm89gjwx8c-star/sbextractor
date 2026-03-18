@@ -23,7 +23,16 @@ Invoke-WebRequest -Uri $ZIP_URL -OutFile $zipPath
 
 # 3. Extract
 Write-Host "Extracting files..." -ForegroundColor Yellow
-Expand-Archive -Path $zipPath -DestinationPath $INSTALL_DIR -Force
+if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
+    Expand-Archive -Path $zipPath -DestinationPath $INSTALL_DIR -Force
+} else {
+    # Fallback for older PowerShell versions (< 5.0)
+    Write-Host "Using Shell.Application fallback for extraction..." -ForegroundColor Yellow
+    $shell = New-Object -ComObject Shell.Application
+    $zipFile = $shell.NameSpace($zipPath)
+    $destFolder = $shell.NameSpace($INSTALL_DIR)
+    $destFolder.CopyHere($zipFile.Items(), 16) # 16 = Respond "Yes to All" for overwrite
+}
 Remove-Item $zipPath
 
 # 4. Initial Configuration (if missing)
