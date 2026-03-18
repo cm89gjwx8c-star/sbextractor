@@ -63,6 +63,7 @@ db:
   path: 'C:\softbilling\bill.gdb'
   user: 'SYSDBA'
   password: 'masterkey'
+  client_path: ''
 railway:
   url: 'https://vash-proekt.railway.app'
   token: ''

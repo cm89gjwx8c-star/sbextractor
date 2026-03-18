@@ -43,7 +43,7 @@ def build():
     shutil.copy(os.path.join('dist', 'sbextractor.exe'), release_dir)
     
     # Copy supporting files
-    files_to_copy = ['config.yaml', 'install_autostart.bat']
+    files_to_copy = ['config.yaml', 'install_autostart.bat', 'fbclient.dll']
     for f in files_to_copy:
         if os.path.exists(f):
             shutil.copy(f, release_dir)

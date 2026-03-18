@@ -30,10 +30,19 @@ class ExtractorAgent:
             self.config['security'] = {'pin_code': '0000'}
             self.save_config()
             
-        self.root = tk.Tk()
-        self.root.title("Fortuna Dashboard - Firebird Extractor")
-        self.root.geometry("500x600")
-        
+        # Load Firebird Client Library if specified or available locally
+        client_lib = self.config['db'].get('client_path')
+        if not client_lib and os.path.exists('fbclient.dll'):
+            # Only use local DLL if it's there
+            client_lib = os.path.abspath('fbclient.dll')
+            
+        if client_lib:
+            try:
+                fdb.load_api(client_lib)
+                self.log(f"Загружена библиотека Firebird Client: {client_lib}")
+            except Exception as e:
+                self.log(f"Предупреждение: Не удалось загрузить клиентскую библиотеку {client_lib}: {e}")
+
         self.tray_icon = None
         self.setup_ui()
         self.setup_tray()
@@ -56,7 +65,7 @@ class ExtractorAgent:
             with open(CONFIG_FILE, 'r') as f:
                 return yaml.safe_load(f)
         return {
-            'db': {'path': '', 'user': 'SYSDBA', 'password': 'masterkey'},
+            'db': {'path': '', 'user': 'SYSDBA', 'password': 'masterkey', 'client_path': ''},
             'railway': {'url': '', 'token': ''},
             'sync': {'interval_seconds': 60, 'tables': [], 'batch_size': 1000},
             'security': {'pin_code': '0000'}
@@ -232,6 +241,11 @@ class ExtractorAgent:
         self.db_pass_var = tk.StringVar(value=self.config['db']['password'])
         ttk.Entry(db_frame, textvariable=self.db_pass_var, show="*").grid(row=2, column=1, sticky="w", padx=5, pady=2)
 
+        ttk.Label(db_frame, text="Клиент (fbclient.dll):").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+        self.db_client_var = tk.StringVar(value=self.config['db'].get('client_path', ''))
+        ttk.Entry(db_frame, textvariable=self.db_client_var, width=40).grid(row=3, column=1, padx=5, pady=2)
+        ttk.Button(db_frame, text="...", command=self.browse_client_dll).grid(row=3, column=2, padx=5, pady=2)
+
         # Railway Settings
         rw_frame = ttk.LabelFrame(self.root, text="Настройки Railway (fortuna-dashboard)")
         rw_frame.pack(fill="x", padx=10, pady=5)
@@ -311,14 +325,22 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         print(f"[{timestamp}] {message}")
 
     def browse_db(self):
-        filename = filedialog.askopenfilename(filetypes=[("Firebird DB", "*.GDB;*.FDB")])
+        filename = filedialog.askopenfilename(title="Выберите базу данных GDB/FDB", filetypes=(("Firebird DB", "*.gdb;*.fdb"), ("All files", "*.*")))
         if filename:
             self.db_path_var.set(filename)
 
+    def browse_client_dll(self):
+        filename = filedialog.askopenfilename(title="Выберите fbclient.dll", filetypes=(("DLL files", "*.dll"), ("All files", "*.*")))
+        if filename:
+            self.db_client_var.set(filename)
+
     def save_settings(self):
-        self.config['db']['path'] = self.db_path_var.get()
-        self.config['db']['user'] = self.db_user_var.get()
-        self.config['db']['password'] = self.db_pass_var.get()
+        self.config['db'] = {
+            'path': self.db_path_var.get(),
+            'user': self.db_user_var.get(),
+            'password': self.db_pass_var.get(),
+            'client_path': self.db_client_var.get()
+        }
         self.config['railway']['url'] = self.rw_url_var.get()
         self.config['railway']['token'] = self.rw_token_var.get()
         self.config['security']['pin_code'] = self.pin_var.get()
