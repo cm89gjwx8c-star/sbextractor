@@ -408,18 +408,24 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 if active_rows:
                     processed_active = self._process_billing_rows(active_rows, columns)
                     if self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_active}]):
-                        # Remove closed sessions from active list
+                        # Remove closed or very old (2+ days) sessions from active list
+                        now = datetime.now()
                         new_active_ids = []
                         for r in processed_active:
                             is_still_open = not r.get('endTime') or r['endTime'] == 'None'
-                            if is_still_open:
+                            
+                            # Check session age
+                            try:
+                                start_dt = datetime.fromisoformat(r['startTime'])
+                                is_recent = (now - start_dt).days < 2
+                            except:
+                                is_recent = True # Fallback if date parsing fails
+                                
+                            if is_still_open and is_recent:
                                 new_active_ids.append(r['id'])
                         
-                        # Also keep IDs that were in active_ids but not returned in this query (e.g. deleted or unexpected)
-                        # but normally they should all be returned. 
-                        # We only replace if we successfully got some rows.
                         self.state['JOINED_BILLING_ACTIVE'] = new_active_ids
-                        active_ids = new_active_ids # Update local ref for next part
+                        active_ids = new_active_ids # Update local ref
                         self.save_state()
 
             # 2. Sync new records
