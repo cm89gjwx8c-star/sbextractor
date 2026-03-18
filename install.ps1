@@ -35,10 +35,18 @@ if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
 }
 Remove-Item $zipPath
 
-# 4. Initial Configuration (if missing)
+# 4. Initial Configuration (if missing or incorrect)
 $configPath = Join-Path $INSTALL_DIR "config.yaml"
-if (!(Test-Path $configPath)) {
-    Write-Host "Initializing configuration..." -ForegroundColor Yellow
+if (Test-Path $configPath) {
+    # Fix potential key mismatch from previous failed install
+    $content = Get-Content $configPath -Raw
+    if ($content -match "database:") {
+        Write-Host "Fixing configuration key mismatch in existing config..." -ForegroundColor Yellow
+        $content = $content -replace "database:", "db:"
+        Set-Content -Path $configPath -Value $content
+    }
+} else {
+    Write-Host "Initializing new configuration..." -ForegroundColor Yellow
     # Create basic config from template or default values
     $defaultConfig = @"
 db:
