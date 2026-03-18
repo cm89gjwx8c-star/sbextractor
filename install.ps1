@@ -41,7 +41,7 @@ if (!(Test-Path $configPath)) {
     Write-Host "Initializing configuration..." -ForegroundColor Yellow
     # Create basic config from template or default values
     $defaultConfig = @"
-database:
+db:
   path: 'C:\softbilling\bill.gdb'
   user: 'SYSDBA'
   password: 'masterkey'
