@@ -509,6 +509,17 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             })
         return processed_records
 
+    def get_table_category(self, table_num):
+        try:
+            num = int(table_num)
+            if 1 <= num <= 9: return 'Русский'
+            if 10 <= num <= 12: return 'Пул'
+            if num in [13, 14]: return 'Теннис'
+            if num == 15: return 'Дартс'
+            if num == 16: return 'ВИП'
+        except: pass
+        return 'Неизвестно'
+
     def sync_loop(self):
         last_billing_sync = 0
         last_tables_sync = 0
