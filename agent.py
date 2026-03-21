@@ -503,18 +503,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             })
         return processed_records
 
-
-    def get_table_category(self, table_num):
-        try:
-            num = int(table_num)
-            if 1 <= num <= 9: return 'Русский'
-            if 10 <= num <= 12: return 'Пул'
-            if num in [13, 14]: return 'Теннис'
-            if num == 15: return 'Дартс'
-            if num == 16: return 'ВИП'
-        except: pass
-        return 'Неизвестно'
-
     def sync_loop(self):
         while self.running:
             try:
@@ -541,31 +529,44 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 conn.close()
                 return
             batch_size = self.config['sync'].get('batch_size', 1000)
+            
             for table in tables:
+                force_full = table.upper() == 'TCLIENT'
                 while True:
-                    last_id = self.state.get(table, 0)
-                    if last_id == 'COMPLETED': break
+                    last_id = 0 if force_full else self.state.get(table, 0)
+                    if last_id == 'COMPLETED' and not force_full: break
+                    
                     cur.execute(f"SELECT * FROM {table} WHERE 1=0")
                     columns = [column[0].upper() for column in cur.description]
-                    id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
-                    if not id_col: id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
+                    
+                    # Detect ID column only if we are doing incremental sync
+                    id_col = None
+                    if not force_full:
+                        id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
+                        if not id_col: id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
 
                     try:
                         if id_col: 
                             self.log(f"Синхронизация {table} по колонке {id_col} (с ID > {last_id})")
                             cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
                         else: 
-                            self.log(f"Синхронизация {table} (выгрузка всей таблицы)")
+                            self.log(f"Синхронизация {table} (полная выгрузка)")
                             cur.execute(f"SELECT * FROM {table}")
+                        
                         raw_rows = cur.fetchall()
                         if not raw_rows:
-                            if not id_col: self.state[table] = 'COMPLETED'
+                            if not id_col and not force_full: self.state[table] = 'COMPLETED'
                             break
+                        
                         rows = [dict(zip(columns, row)) for row in raw_rows]
                         sync_data.append({'table': table, 'records': rows})
-                        if id_col: self.state[table] = max(r[id_col] for r in rows)
-                        else: self.state[table] = 'COMPLETED'; break
-                        if len(raw_rows) < batch_size: break
+                        
+                        if id_col: 
+                            self.state[table] = max(r[id_col] for r in rows)
+                            if len(raw_rows) < batch_size: break
+                        else:
+                            # Full sync version or no ID found: just one batch
+                            break
                     except Exception as e:
                         self.log(f"Ошибка при чтении {table}: {e}")
                         break
