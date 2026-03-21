@@ -71,15 +71,20 @@ class ExtractorAgent:
             pass
 
     def load_config(self):
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r') as f:
-                return yaml.safe_load(f)
-        return {
+        default_config = {
             'db': {'path': '', 'user': 'SYSDBA', 'password': 'masterkey', 'client_path': ''},
             'railway': {'url': '', 'token': ''},
-            'sync': {'interval_seconds': 60, 'tables': [], 'batch_size': 1000},
+            'sync': {'interval_seconds': 60, 'tables': ['TCLIENT'], 'batch_size': 1000},
             'security': {'pin_code': '0000'}
         }
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r') as f:
+                config = yaml.safe_load(f)
+                # Migration: ensure TCLIENT is added if sync list was empty
+                if 'sync' in config and not config['sync'].get('tables'):
+                    config['sync']['tables'] = ['TCLIENT']
+                return config
+        return default_config
 
     def save_config(self):
         with open(CONFIG_FILE, 'w') as f:
@@ -256,9 +261,14 @@ class ExtractorAgent:
         self.sync_interval_var = tk.StringVar(value=str(self.config['sync'].get('interval_seconds', 60)))
         ttk.Entry(sync_frame, textvariable=self.sync_interval_var, width=10).grid(row=0, column=1, sticky="w", padx=5, pady=2)
 
-        ttk.Label(sync_frame, text="Записей за раз:").grid(row=0, column=2, sticky="w", padx=5, pady=2)
         self.sync_batch_var = tk.StringVar(value=str(self.config['sync'].get('batch_size', 1000)))
         ttk.Entry(sync_frame, textvariable=self.sync_batch_var, width=10).grid(row=0, column=3, sticky="w", padx=5, pady=2)
+        
+        ttk.Label(sync_frame, text="Доп. таблицы:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        initial_tables = ", ".join(self.config['sync'].get('tables', []))
+        self.sync_tables_var = tk.StringVar(value=initial_tables)
+        ttk.Entry(sync_frame, textvariable=self.sync_tables_var, width=50).grid(row=1, column=1, columnspan=3, sticky="w", padx=5, pady=2)
+        ttk.Label(sync_frame, text="(через запятую, напр. TCLIENT, TTABLE)", font=("Segoe UI", 8, "italic")).grid(row=2, column=1, columnspan=3, sticky="w", padx=5)
 
         # Security Settings
         sec_frame = ttk.LabelFrame(self.root, text="Безопасность")
@@ -352,6 +362,10 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         try:
             self.config['sync']['interval_seconds'] = int(self.sync_interval_var.get())
             self.config['sync']['batch_size'] = int(self.sync_batch_var.get())
+            
+            # Parse tables list
+            tables_str = self.sync_tables_var.get()
+            self.config['sync']['tables'] = [t.strip().upper() for t in tables_str.split(',') if t.strip()]
         except ValueError:
             self.log("Ошибка: интервал и размер пакета должны быть числами")
         
