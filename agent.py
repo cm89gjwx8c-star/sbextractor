@@ -551,8 +551,12 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                     if not id_col: id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
 
                     try:
-                        if id_col: cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
-                        else: cur.execute(f"SELECT * FROM {table}")
+                        if id_col: 
+                            self.log(f"Синхронизация {table} по колонке {id_col} (с ID > {last_id})")
+                            cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
+                        else: 
+                            self.log(f"Синхронизация {table} (выгрузка всей таблицы)")
+                            cur.execute(f"SELECT * FROM {table}")
                         raw_rows = cur.fetchall()
                         if not raw_rows:
                             if not id_col: self.state[table] = 'COMPLETED'
