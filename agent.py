@@ -74,7 +74,7 @@ class ExtractorAgent:
         default_config = {
             'db': {'path': '', 'user': 'SYSDBA', 'password': 'masterkey', 'client_path': ''},
             'railway': {'url': '', 'token': ''},
-            'sync': {'interval_seconds': 60, 'tables': ['TCLIENT'], 'batch_size': 1000},
+            'sync': {'interval_seconds': 60, 'tables_interval_seconds': 3600, 'tables': ['TCLIENT'], 'batch_size': 1000},
             'security': {'pin_code': '0000'}
         }
         if os.path.exists(CONFIG_FILE):
@@ -257,18 +257,23 @@ class ExtractorAgent:
         sync_frame = ttk.LabelFrame(self.root, text="Настройки синхронизации")
         sync_frame.pack(fill="x", padx=10, pady=5)
 
-        ttk.Label(sync_frame, text="Интервал (сек):").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(sync_frame, text="Биллинг (сек):").grid(row=0, column=0, sticky="w", padx=5, pady=2)
         self.sync_interval_var = tk.StringVar(value=str(self.config['sync'].get('interval_seconds', 60)))
         ttk.Entry(sync_frame, textvariable=self.sync_interval_var, width=10).grid(row=0, column=1, sticky="w", padx=5, pady=2)
 
-        self.sync_batch_var = tk.StringVar(value=str(self.config['sync'].get('batch_size', 1000)))
-        ttk.Entry(sync_frame, textvariable=self.sync_batch_var, width=10).grid(row=0, column=3, sticky="w", padx=5, pady=2)
+        ttk.Label(sync_frame, text="Таблицы (сек):").grid(row=0, column=2, sticky="w", padx=5, pady=2)
+        self.sync_tables_interval_var = tk.StringVar(value=str(self.config['sync'].get('tables_interval_seconds', 3600)))
+        ttk.Entry(sync_frame, textvariable=self.sync_tables_interval_var, width=10).grid(row=0, column=3, sticky="w", padx=5, pady=2)
         
-        ttk.Label(sync_frame, text="Доп. таблицы:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        ttk.Label(sync_frame, text="Размер пакета:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        self.sync_batch_var = tk.StringVar(value=str(self.config['sync'].get('batch_size', 1000)))
+        ttk.Entry(sync_frame, textvariable=self.sync_batch_var, width=10).grid(row=1, column=1, sticky="w", padx=5, pady=2)
+
+        ttk.Label(sync_frame, text="Доп. таблицы:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
         initial_tables = ", ".join(self.config['sync'].get('tables', []))
         self.sync_tables_var = tk.StringVar(value=initial_tables)
-        ttk.Entry(sync_frame, textvariable=self.sync_tables_var, width=50).grid(row=1, column=1, columnspan=3, sticky="w", padx=5, pady=2)
-        ttk.Label(sync_frame, text="(через запятую, напр. TCLIENT, TTABLE)", font=("Segoe UI", 8, "italic")).grid(row=2, column=1, columnspan=3, sticky="w", padx=5)
+        ttk.Entry(sync_frame, textvariable=self.sync_tables_var, width=50).grid(row=2, column=1, columnspan=3, sticky="w", padx=5, pady=2)
+        ttk.Label(sync_frame, text="(через запятую, напр. TCLIENT, TTABLE)", font=("Segoe UI", 8, "italic")).grid(row=3, column=1, columnspan=3, sticky="w", padx=5)
 
         # Security Settings
         sec_frame = ttk.LabelFrame(self.root, text="Безопасность")
@@ -361,6 +366,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         
         try:
             self.config['sync']['interval_seconds'] = int(self.sync_interval_var.get())
+            self.config['sync']['tables_interval_seconds'] = int(self.sync_tables_interval_var.get())
             self.config['sync']['batch_size'] = int(self.sync_batch_var.get())
             
             # Parse tables list
@@ -504,19 +510,32 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         return processed_records
 
     def sync_loop(self):
+        last_billing_sync = 0
+        last_tables_sync = 0
+        
         while self.running:
+            now = time.time()
             try:
-                self.sync_billing()
-                self.perform_sync()
+                billing_interval = int(self.config['sync'].get('interval_seconds', 60))
+                tables_interval = int(self.config['sync'].get('tables_interval_seconds', 3600))
+                
+                if now - last_billing_sync >= billing_interval:
+                    self.sync_billing()
+                    last_billing_sync = now
+                    
+                if now - last_tables_sync >= tables_interval:
+                    self.perform_sync()
+                    last_tables_sync = now
+                    
                 self.check_commands()
                 self.send_heartbeat()
             except Exception as e:
                 self.log(f"Критическая ошибка цикла: {e}")
             
-            interval = int(self.config['sync'].get('interval_seconds', 60))
-            for _ in range(interval):
+            # Precise sleep to remain responsive
+            for _ in range(10):
                 if not self.running: break
-                time.sleep(1)
+                time.sleep(0.1)
 
     def perform_sync(self):
         try:
