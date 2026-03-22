@@ -562,6 +562,15 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             
             for table in tables:
                 force_full = table.upper() == 'TCLIENT'
+                
+                # Diagnostic for TTABLE mapping
+                if table.upper() == 'TTABLE':
+                    try:
+                        cur.execute("SELECT TABLE_ID, FN_TABLE FROM TTABLE")
+                        mapping = {r[0]: r[1] for r in cur.fetchall()}
+                        self.log(f"Диагностика TTABLE (ID->Номер): {mapping}")
+                    except: pass
+
                 while True:
                     last_id = 0 if force_full else self.state.get(table, 0)
                     if last_id == 'COMPLETED' and not force_full: break
@@ -569,14 +578,12 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                     cur.execute(f"SELECT * FROM {table} WHERE 1=0")
                     columns = [column[0].upper() for column in cur.description]
                     
-                    # Detect ID column only if we are doing incremental sync
-                    id_col = None
-                    if not force_full:
-                        id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID']), None)
-                        if not id_col: id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
+                    # Detect ID column for state tracking and field mapping
+                    id_col = next((c for c in columns if c in ['ID', 'UUID', 'GUID', 'REC_ID', 'PK_ID', 'T_ID', 'U_ID', 'CLIENT_ID']), None)
+                    if not id_col: id_col = next((c for c in columns if c.startswith('ID_') or c.endswith('_ID')), None)
 
                     try:
-                        if id_col: 
+                        if id_col and not force_full: 
                             self.log(f"Синхронизация {table} по колонке {id_col} (с ID > {last_id})")
                             cur.execute(f"SELECT FIRST {batch_size} * FROM {table} WHERE {id_col} > ? ORDER BY {id_col} ASC", (last_id,))
                         else: 
@@ -588,7 +595,13 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                             if not id_col and not force_full: self.state[table] = 'COMPLETED'
                             break
                         
-                        rows = [dict(zip(columns, row)) for row in raw_rows]
+                        rows = []
+                        for row in raw_rows:
+                            d = dict(zip(columns, row))
+                            if id_col and 'ID' not in d:
+                                d['ID'] = d[id_col]
+                            rows.append(d)
+
                         sync_data.append({'table': table, 'records': rows})
                         
                         if id_col: 
