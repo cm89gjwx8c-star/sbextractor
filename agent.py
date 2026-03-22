@@ -287,14 +287,13 @@ class ExtractorAgent:
         query_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         sql_text = """SELECT 
-    u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM,
+    u.UCHET_ID as ID, u.FK_TABLE_ID as TABLE_NUM,
     u.FD_START as START_TIME, u.FD_END as END_TIME,
     u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT,
     c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE,
     u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED
 FROM TUCHET u
-LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID
-LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
+LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID"""
         
         self.query_area = tk.Text(query_frame, height=8, font=("Consolas", 8), bg="#f0f0f0")
         self.query_area.insert(tk.END, sql_text)
@@ -421,7 +420,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             # 1. Re-sync active sessions
             if active_ids:
                 id_list = ','.join(map(str, active_ids))
-                query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID IN ({id_list})"
+                query = f"SELECT u.UCHET_ID as ID, u.FK_TABLE_ID as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID WHERE u.UCHET_ID IN ({id_list})"
                 cur.execute(query)
                 columns = [column[0].upper() for column in cur.description]
                 active_rows = cur.fetchall()
@@ -451,7 +450,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             # 2. Sync new records
             while True:
                 last_id = self.state.get('JOINED_BILLING', 0)
-                query = f"SELECT u.UCHET_ID as ID, t.FN_TABLE as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID WHERE u.UCHET_ID > ? ORDER BY u.UCHET_ID ASC ROWS 1 TO {batch_size}"
+                query = f"SELECT u.UCHET_ID as ID, u.FK_TABLE_ID as TABLE_NUM, u.FD_START as START_TIME, u.FD_END as END_TIME, u.FN_TIME as DURATION_MINS, u.FN_RULE as DISCOUNT_PERCENT, c.FC_NAME as CLIENT_NAME, u.FN_SUMMA1 as SUM_BASE, u.FN_SUMMA as SUM_WITH_DISCOUNT, u.FN_TAR as TARIFF_APPLIED FROM TUCHET u LEFT JOIN TCLIENT c ON u.FK_CLIENT_ID = c.CLIENT_ID WHERE u.UCHET_ID > ? ORDER BY u.UCHET_ID ASC ROWS 1 TO {batch_size}"
                 cur.execute(query, (last_id,))
                 columns = [column[0].upper() for column in cur.description]
                 raw_rows = cur.fetchall()
@@ -563,14 +562,6 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             for table in tables:
                 force_full = table.upper() == 'TCLIENT'
                 
-                # Diagnostic for TTABLE mapping
-                if table.upper() == 'TTABLE':
-                    try:
-                        cur.execute("SELECT TABLE_ID, FN_TABLE FROM TTABLE")
-                        mapping = {r[0]: r[1] for r in cur.fetchall()}
-                        self.log(f"Диагностика TTABLE (ID->Номер): {mapping}")
-                    except: pass
-
                 while True:
                     last_id = 0 if force_full else self.state.get(table, 0)
                     if last_id == 'COMPLETED' and not force_full: break
