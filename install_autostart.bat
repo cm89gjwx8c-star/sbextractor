@@ -1,24 +1,35 @@
 @echo off
 setlocal
 
-:: Get the current directory
+:: Get the current directory and determine the target app
 set "APP_DIR=%~dp0"
-set "APP_PATH=%APP_DIR%agent.py"
-set "STARTUP_FOLDER=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "SHORTCUT_PATH=%STARTUP_FOLDER%\FortunaExtractor.vbs"
+if exist "%APP_DIR%sbextractor.exe" (
+    set "TARGET_PATH=%APP_DIR%sbextractor.exe"
+) else (
+    set "TARGET_PATH=%APP_DIR%agent.py"
+)
 
-echo Setting up Fortuna Extractor background service...
+echo --- Fortuna Extractor Autostart Setup ---
+echo App Path: %TARGET_PATH%
 
-:: Create a VBScript file that runs the app in the background (hidden console)
-(
-echo Set oShell = CreateObject^("WScript.Shell"^)
-echo strArgs = "pythonw.exe """ ^& "%APP_PATH%" ^& """ --autostart"
-echo oShell.Run strArgs, 0, false
-) > "%SHORTCUT_PATH%"
+:: Determine if we need pythonw or if it's an exe
+if "%TARGET_PATH:~-4%"==".exe" (
+    set "CMD_LINE=\"%TARGET_PATH%\" --autostart"
+) else (
+    set "CMD_LINE=pythonw.exe \"%TARGET_PATH%\" --autostart"
+)
 
-echo.
-echo Success! The extractor will now start automatically in the background when you log in.
-echo You can find the icon in the system tray (near the clock).
-echo.
-echo To remove: Delete "%SHORTCUT_PATH%"
+echo Setting up Registry Run key...
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "FortunaExtractor" /t REG_SZ /d "%CMD_LINE%" /f
+
+if %ERRORLEVEL% EQU 0 (
+    echo.
+    echo Success! The extractor will now start automatically in the background when you log in.
+    echo.
+) else (
+    echo.
+    echo Error: Failed to update registry. Please try running this script as Administrator.
+    echo.
+)
+
 pause

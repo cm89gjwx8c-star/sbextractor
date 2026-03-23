@@ -74,7 +74,7 @@ class ExtractorAgent:
         default_config = {
             'db': {'path': '', 'user': 'SYSDBA', 'password': 'masterkey', 'client_path': ''},
             'railway': {'url': '', 'token': ''},
-            'sync': {'interval_seconds': 60, 'tables_interval_seconds': 3600, 'tables': ['TCLIENT'], 'batch_size': 1000},
+            'sync': {'interval_seconds': 60, 'tables_interval_seconds': 3600, 'tables': ['TCLIENT'], 'batch_size': 1000, 'grace_period_seconds': 10},
             'security': {'pin_code': '0000'}
         }
         if os.path.exists(CONFIG_FILE):
@@ -269,6 +269,10 @@ class ExtractorAgent:
         self.sync_batch_var = tk.StringVar(value=str(self.config['sync'].get('batch_size', 1000)))
         ttk.Entry(sync_frame, textvariable=self.sync_batch_var, width=10).grid(row=1, column=1, sticky="w", padx=5, pady=2)
 
+        ttk.Label(sync_frame, text="Grace Period (сек):").grid(row=1, column=2, sticky="w", padx=5, pady=2)
+        self.sync_grace_var = tk.StringVar(value=str(self.config['sync'].get('grace_period_seconds', 10)))
+        ttk.Entry(sync_frame, textvariable=self.sync_grace_var, width=10).grid(row=1, column=3, sticky="w", padx=5, pady=2)
+
         ttk.Label(sync_frame, text="Доп. таблицы:").grid(row=2, column=0, sticky="w", padx=5, pady=2)
         initial_tables = ", ".join(self.config['sync'].get('tables', []))
         self.sync_tables_var = tk.StringVar(value=initial_tables)
@@ -368,6 +372,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             self.config['sync']['interval_seconds'] = int(self.sync_interval_var.get())
             self.config['sync']['tables_interval_seconds'] = int(self.sync_tables_interval_var.get())
             self.config['sync']['batch_size'] = int(self.sync_batch_var.get())
+            self.config['sync']['grace_period_seconds'] = int(self.sync_grace_var.get())
             
             # Parse tables list
             tables_str = self.sync_tables_var.get()
@@ -428,20 +433,28 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
                 if active_rows:
                     processed_active = self._process_billing_rows(active_rows, columns)
                     if self.upload_to_railway([{'table': 'JOINED_BILLING', 'records': processed_active}]):
-                        # Remove closed or very old (2+ days) sessions from active list
+                        grace_period = self.config['sync'].get('grace_period_seconds', 10)
                         now = datetime.now()
                         new_active_ids = []
                         for r in processed_active:
                             is_still_open = not r.get('endTime') or r['endTime'] == 'None'
                             
-                            # Check session age
+                            is_recently_closed = False
+                            if not is_still_open:
+                                try:
+                                    end_dt = datetime.fromisoformat(r['endTime'])
+                                    if (now - end_dt).total_seconds() < grace_period:
+                                        is_recently_closed = True
+                                except: pass
+                                
+                            # Check session age (sanity check for 2 days)
                             try:
                                 start_dt = datetime.fromisoformat(r['startTime'])
                                 is_recent = (now - start_dt).days < 2
                             except:
-                                is_recent = True # Fallback if date parsing fails
+                                is_recent = True
                                 
-                            if is_still_open and is_recent:
+                            if (is_still_open or is_recently_closed) and is_recent:
                                 new_active_ids.append(r['id'])
                         
                         self.state['JOINED_BILLING_ACTIVE'] = new_active_ids

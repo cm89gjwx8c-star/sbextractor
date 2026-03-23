@@ -98,8 +98,14 @@ security:
 # 5. Set up Auto-start
 Write-Host "Setting up Windows Startup..." -ForegroundColor Yellow
 Set-Location $INSTALL_DIR
+
+# Cleanup old VBS shortcut if exists
+$startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+$oldShortcut = Join-Path $startupFolder "FortunaExtractor.vbs"
+if (Test-Path $oldShortcut) { Remove-Item $oldShortcut -Force }
+
 try {
-    # Run the existing auto-start script
+    # Run the new registry-based auto-start script
     cmd.exe /c "install_autostart.bat"
 } catch {
     Write-Host "Warning: Could not set up autostart automatically." -ForegroundColor Red
