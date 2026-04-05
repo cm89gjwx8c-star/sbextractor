@@ -370,7 +370,7 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         except:
             return long_path
 
-    def save_settings(self):
+    def save_settings(self, silent=False):
         new_client_path = self.db_client_var.get()
         old_client_path = self.config['db'].get('client_path', '')
 
@@ -408,12 +408,12 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
             except Exception as e:
                 messagebox.showerror("Ошибка", f"Не удалось загрузить DLL: {e}")
                 self.log(f"Ошибка загрузки DLL {new_client_path}: {e}")
-        else:
+        elif not silent:
             messagebox.showinfo("Успех", "Настройки сохранены")
 
     def toggle_sync(self):
         if not self.running:
-            self.save_settings()
+            self.save_settings(silent=True)
             if not self.config['db']['path'] or not self.config['railway']['url']:
                 messagebox.showwarning("Внимание", "Заполните настройки перед запуском")
                 return
