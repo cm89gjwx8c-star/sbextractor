@@ -103,18 +103,34 @@ class ExtractorAgent:
     def check_single_instance(self):
         if os.path.exists(self.lock_file):
             try:
-                # Try to see if the process is actually running (Windows specific check could be complex)
-                # For now, we just try to delete it. If it fails, someone else has it open.
+                with open(self.lock_file, 'r') as f:
+                    old_pid = int(f.read().strip())
+                # Check if old process is still alive (Windows)
+                if sys.platform == 'win32':
+                    import ctypes
+                    kernel32 = ctypes.windll.kernel32
+                    handle = kernel32.OpenProcess(0x1000, False, old_pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+                    if handle:
+                        kernel32.CloseHandle(handle)
+                        # Process exists — show error and exit
+                        root = tk.Tk()
+                        root.withdraw()
+                        messagebox.showerror("Ошибка", "Экстрактор уже запущен!")
+                        sys.exit(1)
+                # Old process is dead, remove stale lock
                 os.remove(self.lock_file)
-            except:
-                # Can't remove, likely in use
-                root = tk.Tk()
-                root.withdraw()
-                messagebox.showerror("Ошибка", "Экстрактор уже запущен!")
-                sys.exit(1)
+            except (ValueError, OSError):
+                # Corrupt or inaccessible lock file — remove it
+                try:
+                    os.remove(self.lock_file)
+                except OSError:
+                    pass
         
-        with open(self.lock_file, 'w') as f:
-            f.write(str(os.getpid()))
+        try:
+            with open(self.lock_file, 'w') as f:
+                f.write(str(os.getpid()))
+        except OSError as e:
+            print(f"Warning: Could not create lock file: {e}")
 
     def setup_tray(self):
         width, height = 64, 64
@@ -674,6 +690,13 @@ LEFT JOIN TTABLE t ON u.FK_TABLE_ID = t.TABLE_ID"""
         except: pass
 
 if __name__ == "__main__":
+    # Ensure working directory is the app directory (critical for autostart from Registry)
+    if getattr(sys, 'frozen', False):
+        app_dir = os.path.dirname(sys.executable)
+    else:
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(app_dir)
+
     autostart = "--autostart" in sys.argv
     app = ExtractorAgent(autostart=autostart)
     app.root.mainloop()
